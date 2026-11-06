@@ -1,0 +1,18 @@
+# Never commit firewall data or secrets
+*.xml
+config-*
+*.ovpn
+*.pem
+*.key
+*.p12
+*pass*.txt
+*secret*
+.env
+reports/
+audits/
+*.log
+
+# macOS and editors
+.DS_Store
+.vscode/
+.idea/
