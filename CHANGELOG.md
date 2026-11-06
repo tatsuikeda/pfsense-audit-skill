@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- Review fixes: the UniFi collector keeps devices and the other part when one networks or Wi-Fi call fails, and only a CAPTIVE_PORTAL hotspot counts as a guest SSID (Passpoint does not). The self-update gate now allows existing checks only to gain notes, existing lessons only to change the lesson 11 feed table, and rejects @mentions and long encoded strings in the research note. The research job can no longer read outside the checkout, and shared hosting hosts left its fetch allow-list. README and `SKILL.md` no longer claim Plus or 26.10 support before validation, and examples use documentation addresses.
+
+- UniFi checks UNIFI-001 to 005 and 007 via `--unifi` (read-only GETs with an API key from an environment variable). Uses the Integration API (spec 11.0.97) and the legacy API for settings it does not expose. Secrets are dropped on arrival, redirects are refused, TLS is verified unless `--unifi-insecure` is given. Not yet run on a live console; UNIFI-001, 003 and 005 are marked unverified. Offline tests in `tests/test_unifi.py`.
+
 - `SKILL.md`: Claude Code skill that runs the audit, explains findings by priority, and only changes the firewall on explicit request.
 - Feed checks hardened: public-address checks before connecting and at every redirect, live peer check before TLS, no proxies, credentials and query strings masked in reports.
 

@@ -67,7 +67,7 @@ Each lesson below came from a real deployment: a small-office pfSense build with
 ### 9. A copied DNSBL config silently leaves DNSBL off
 - **You see:** DNSBL settings look right. One log line: `DNSBL disabled: no VIP configured`.
 - **Really:** in 3.2.17 the VIP setting is `pfb_dnsvip4`, which references a virtual IP by ID (`_vip<uniqid>`). The older `pfb_dnsvip` (an IP address) is ignored, and 2.9 no longer creates the VIP for you.
-- **Fix:** create an IP Alias VIP on `lo0` (for example `10.10.10.1/32`), select it as the DNSBL VIP, force reload.
+- **Fix:** create an IP Alias VIP on `lo0` with an unused /32 (any private address outside your own subnets; written here as `192.0.2.250/32`), select it as the DNSBL VIP, force reload.
 - **Seen on:** CE 2.9.0, pfBlockerNG 3.2.17_1
 
 ### 10. Wildcard blocklists need TLD mode

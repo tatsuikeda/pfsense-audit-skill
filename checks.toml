@@ -461,43 +461,59 @@ id = "UNIFI-001"
 category = "unifi"
 title = "DHCP Guarding on with the firewall as trusted server"
 risk = "high"
-verify = { controller = "network dhcpguard_enabled true and dhcpd_ip_1 == firewall LAN IP" }
+verify = { controller = "Integration API GET /v1/sites/{siteId}/networks/{networkId}: dhcpGuarding.trustedDhcpServerIpAddresses contains the firewall address for that VLAN (interfaces/lan/ipaddr when untagged); null or absent means off. Fallback, legacy API GET rest/networkconf: dhcpguard_enabled true and dhcpd_ip_1..3 contain it" }
+fix = "UniFi Network > Settings > Networks > (network) > DHCP Guarding, trusted server = the pfSense interface address"
+impact = "none if the trusted address is right; a wrong one blocks all DHCP on that network"
 lesson = 20
-verified_on = ["unifi-network-11.0.97"]
+verified_on = ["unverified"]
+notes = "Legacy field names confirmed in a Network 11.0.97 database. Integration API names come from Ubiquiti's 11.0.97 OpenAPI spec (developer.ui.com/network/v11.0.97/openapi.json, checked 2026-11-05) and have not been read from a live console. The list endpoint omits dhcpGuarding, so each network needs a detail call. The first published spec that has networks and dhcpGuarding is 10.0.162 (the 9.5.21 spec has neither; no earlier 10.0 spec is published, checked 2026-11-05). The collector tries them on any 10.0 or newer controller; if a networks call fails, only the networks part is dropped and the check falls back to the legacy API."
 
 [[checks]]
 id = "UNIFI-002"
 category = "unifi"
 title = "DHCP Snooping on"
 risk = "medium"
-verify = { controller = "global_switch setting dhcp_snoop true" }
+verify = { controller = "legacy API GET /proxy/network/api/s/<site>/get/setting, section key=global_switch: dhcp_snoop true" }
+fix = "UniFi Network > Settings > Networks > Global Switch Settings > DHCP Snooping"
+impact = "none"
+lesson = 17
 verified_on = ["unifi-network-11.0.97"]
+notes = "Not exposed by the Integration API (11.0.97). The field is confirmed in a Network 11.0.97 database; reading it over the legacy API with an API key is unconfirmed (see README, UniFi section)."
 
 [[checks]]
 id = "UNIFI-003"
 category = "unifi"
 title = "Guest SSID is marked guest and still has a password"
 risk = "high"
-verify = { controller = "wlan is_guest true; security != open unless intended" }
+verify = { controller = "legacy API GET rest/wlanconf: is_guest true; security != open unless listed with --unifi-open-ssid; l2_isolation on for guest SSIDs. Fallback, Integration API GET /v1/sites/{siteId}/wifi/broadcasts/{id}: hotspotConfiguration.type CAPTIVE_PORTAL counts as guest (PASSPOINT does not), securityConfiguration.type OPEN is open, clientIsolationEnabled" }
+fix = "Set a password on the guest SSID (or keep the portal and add a password), mark it Guest, enable Client Device Isolation"
+impact = "guest Wi-Fi clients reconnect"
 lesson = 19
-verified_on = ["unifi-network-11.0.97"]
+verified_on = ["unverified"]
+notes = "Legacy names (is_guest, security, l2_isolation) confirmed in a Network 11.0.97 database. The Integration API has no guest flag, and its field names come from the 11.0.97 OpenAPI spec, not a live console. Pass --unifi-open-ssid NAME for an SSID that is open on purpose."
 
 [[checks]]
 id = "UNIFI-004"
 category = "unifi"
 title = "Guest restrictions do not block the firewall"
 risk = "high"
-verify = { controller = "guest restricted subnets vs firewall LAN IP; allowed list includes it if overlapping" }
+verify = { controller = "legacy API GET get/setting, section key=guest_access: restricted_subnet / restricted_subnet_N contain the firewall LAN (or guest VLAN) address and allowed_subnet / allowed_subnet_N do not; WARN" }
+fix = "UniFi Network > Settings > Hotspot (Guest Control) > Allowed subnets: add the firewall address"
+impact = "none"
 lesson = 19
 verified_on = ["unifi-network-11.0.97"]
+notes = "The 11.0.97 database stores numbered restricted_subnet_N; go-unifi models a single field. Both forms are parsed. Not exposed by the Integration API."
 
 [[checks]]
 id = "UNIFI-005"
 category = "unifi"
 title = "Devices inform to the right controller address"
 risk = "medium"
-verify = { controller = "device inform_ip == controller IP for every device" }
-verified_on = ["unifi-network-11.0.97"]
+verify = { controller = "legacy API GET stat/device: host of inform_url, or inform_ip, equals the --unifi host or one of its addresses for every adopted device; state 0, 9, 10 or 11 also warns. Fallback, Integration API GET /v1/sites/{siteId}/devices: reports devices whose state is not ONLINE, no inform data" }
+fix = "Set the controller's Inform Host override in UniFi Network settings (menu location varies by version), or re-run set-inform on the device"
+impact = "devices reconnect to the controller; no client traffic loss"
+verified_on = ["unverified"]
+notes = "inform_url, inform_ip and the numeric state come from aiounifi v98 and go-unifi v2.3.0, not a live console. The Integration API has no inform field."
 
 [[checks]]
 id = "UNIFI-006"
@@ -513,5 +529,6 @@ id = "UNIFI-007"
 category = "unifi"
 title = "Device auto-upgrade is a deliberate choice"
 risk = "info"
+verify = { controller = "legacy API GET get/setting, section key=mgmt: auto_upgrade, auto_upgrade_hour; also reports x_ssh_enabled and x_ssh_auth_password_enabled (booleans only). Integration API devices: firmwareUpdatable count" }
 verified_on = ["unifi-network-11.0.97"]
-notes = "Auto-upgrade reboots switches and APs on their own schedule. Report it; do not demand a setting."
+notes = "Auto-upgrade reboots switches and APs on their own schedule. Report it; do not demand a setting. Always INFO. Device SSH with passwords is mentioned in the detail and may become its own check."

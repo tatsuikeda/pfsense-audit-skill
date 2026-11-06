@@ -1,0 +1,47 @@
+{
+  "_comment": "Synthetic inputs for offline tests, bad variant. Documentation addresses and example.com only.",
+  "external": {
+    "ip": "203.0.113.2",
+    "tcp": {"21": false, "22": false, "23": false, "80": false, "443": true, "3389": true, "8080": false, "8443": true},
+    "udp": {"53": false, "123": true, "161": false, "1900": false}
+  },
+  "feeds": [["https://lists.example.com/ads.txt", ""], ["https://lists.example.com/gone.txt", "404"], ["https://lists.example.com/empty.txt", "only 12 bytes"]],
+  "unifi": {
+    "url": "https://unifi.example.com",
+    "tls": "insecure",
+    "version": "11.0.97",
+    "errors": [],
+    "controller_hosts": ["unifi.example.com", "192.0.2.5"],
+    "integration": {
+      "site": "Default",
+      "devices": [{"id": "d1", "name": "sw1", "model": "USW", "state": "OFFLINE", "firmwareUpdatable": true}],
+      "networks": [
+        {"id": "n1", "name": "LAN", "vlanId": 1, "enabled": true},
+        {"id": "n2", "name": "Guest", "vlanId": 20, "enabled": true, "dhcpGuarding": {"trustedDhcpServerIpAddresses": ["198.51.100.9"]}}
+      ],
+      "wlans": [
+        {"id": "w2", "name": "Visitors", "enabled": true, "clientIsolationEnabled": false, "securityConfiguration": {"type": "OPEN"}, "hotspotConfiguration": {"type": "CAPTIVE_PORTAL"}}
+      ]
+    },
+    "legacy": {
+      "settings": {
+        "global_switch": {"key": "global_switch", "dhcp_snoop": false},
+        "guest_access": {"key": "guest_access", "restricted_subnet_1": "192.0.2.0/24"},
+        "mgmt": {"key": "mgmt", "auto_upgrade": true, "auto_upgrade_hour": 3, "x_ssh_enabled": true, "x_ssh_auth_password_enabled": true}
+      },
+      "networkconf": [
+        {"name": "LAN", "purpose": "corporate", "dhcpguard_enabled": false},
+        {"name": "Guest", "purpose": "guest", "vlan_enabled": true, "vlan": "20", "dhcpguard_enabled": true, "dhcpd_ip_1": "198.51.100.9"}
+      ],
+      "wlanconf": [
+        {"name": "Office", "enabled": true, "is_guest": false, "security": "open"},
+        {"name": "Guest WiFi", "enabled": true, "is_guest": false, "security": "wpapsk"},
+        {"name": "Visitors", "enabled": true, "is_guest": true, "security": "open", "l2_isolation": false}
+      ],
+      "devices": [
+        {"name": "sw1", "model": "USW", "adopted": true, "state": 11, "inform_url": "http://unifi.example.com:8080/inform"},
+        {"name": "ap1", "model": "U7", "adopted": true, "state": 1, "inform_url": "http://192.0.2.50:8080/inform", "inform_ip": "192.0.2.50"}
+      ]
+    }
+  }
+}

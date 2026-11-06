@@ -1,0 +1,73 @@
+Synthetic remote output for offline tests, in the "@@section" format that
+pfaudit.py's REMOTE_SCRIPT prints. Lines before the first marker are ignored by
+split_sections(). No real hosts, addresses or MACs. "Good" variant.
+@@version
+2.9.0-RELEASE
+16.0-CURRENT
+@@sockstat
+USER     COMMAND    PID   FD  PROTO  LOCAL ADDRESS         FOREIGN ADDRESS
+root     lighttpd_p 4242  6   tcp4   198.51.100.250:443    *:*
+root     lighttpd_p 4242  7   tcp4   198.51.100.250:80     *:*
+unbound  unbound    4100  5   udp4   *:53                  *:*
+root     sshd       900   4   tcp4   *:22                  *:*
+@@crontab
+SHELL=/bin/sh
+0	*	*	*	*	root	/usr/bin/nice -n20 /usr/local/bin/php /usr/local/sbin/acbupload.php
+1,31	0-5	*	*	*	root	/usr/bin/nice -n20 adjkerntz -a
+@@acbstage
+       0
+@@kldstat
+Id Refs Address                Size Name
+ 1   40 0xffffffff80200000  2f2e5b8 kernel
+ 2    1 0xffffffff83130000     8c08 aesni.ko
+ 3    1 0xffffffff83140000     5a30 coretemp.ko
+@@temps
+dev.cpu.0.temperature: 45.0C
+dev.cpu.1.temperature: 47.0C
+@@cpufreq
+2000/-1 1600/-1 800/-1
+C1/1/1 C2/2/127
+@@aesni_cpu
+4
+@@zpool
+all pools are healthy
+@@smart
+ada0 PASSED
+nda0 PASSED
+@@bectl
+3
+@@unbound
+running
+@@dns_local
+rcode: NOERROR
+@@dns_intercept
+@@dnsbl_test
+domain ads.example.com
+direct 198.51.100.250
+sub 198.51.100.250
+@@sshd
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin yes
+@@ups
+ups1 OL CHRG
+@@ifconfig
+igb0: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mtu 1500
+	options=4800028<VLAN_MTU,JUMBO_MTU,NOMAP>
+igb1: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mtu 1500
+	options=4800028<VLAN_MTU,JUMBO_MTU,NOMAP>
+igb2: flags=8802<BROADCAST,SIMPLEX,MULTICAST> metric 0 mtu 1500
+	options=4e507bb<RXCSUM,TXCSUM,VLAN_MTU,TSO4,TSO6,LRO>
+igb1.20: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mtu 1500
+	options=4000000<NOMAP>
+lo0: flags=1008049<UP,LOOPBACK,RUNNING,MULTICAST,LOWER_UP> metric 0 mtu 16384
+	options=680003<RXCSUM,TXCSUM,LINKSTATE,RXCSUM_IPV6,TXCSUM_IPV6>
+@@certs
+/var/etc/cert.crt|Nov 26 12:00:00 2099 GMT
+/var/etc/openvpn/server1/cert|Nov 26 12:00:00 2099 GMT
+@@pfinfo
+  current entries                      123
+@@updates
+Your system is up to date
+@@dhcpscan

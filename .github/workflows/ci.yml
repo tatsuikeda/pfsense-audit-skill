@@ -1,0 +1,65 @@
+# CI: validate the check catalog and run the unit tests.
+#
+# Runs on pull requests (including a draft self-update PR when it is marked
+# ready for review) and on pushes to main. Uses pull_request, never
+# pull_request_target, so fork code never runs with secrets or a write token.
+#
+# A pull request opened by the monthly workflow with GITHUB_TOKEN creates CI
+# runs that wait for approval from someone with write access; marking the
+# draft "Ready for review" also starts a run.
+#
+# Versions pinned by commit SHA (checked with git ls-remote on 2026-11-05):
+#   actions/checkout v7.0.1, actions/setup-python v7.1.0.
+
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported (tomllib arrived in 3.11) through current.
+        python-version: ["3.11", "3.13", "3.14"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: pfaudit.py compiles
+        run: python -I -m py_compile pfaudit.py
+
+      - name: checks.toml parses, matches the schema, and every check is implemented or planned
+        run: python -I .github/scripts/validate_catalog.py
+
+      - name: Unit tests
+        # Not -I: tests import pfaudit from the repository root, which -I
+        # would drop from sys.path. The tests folder may not exist yet.
+        run: |
+          if ls tests/test*.py >/dev/null 2>&1; then
+            python -m unittest discover -s tests -v
+          else
+            echo "::notice::No tests/test*.py found, skipping unit tests."
+          fi

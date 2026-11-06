@@ -1,0 +1,62 @@
+Synthetic remote output for offline tests, in the "@@section" format that
+pfaudit.py's REMOTE_SCRIPT prints. No real hosts, addresses or MACs (the MAC
+below is from the RFC 7042 documentation block). "Bad" variant.
+@@version
+2.9.0-RELEASE
+16.0-CURRENT
+@@sockstat
+USER     COMMAND    PID   FD  PROTO  LOCAL ADDRESS         FOREIGN ADDRESS
+unbound  unbound    4100  5   udp4   *:53                  *:*
+@@crontab
+SHELL=/bin/sh
+1,31	0-5	*	*	*	root	/usr/bin/nice -n20 adjkerntz -a
+@@acbstage
+       0
+@@kldstat
+Id Refs Address                Size Name
+ 1   40 0xffffffff80200000  2f2e5b8 kernel
+@@temps
+dev.cpu.0.temperature: 85.0C
+dev.cpu.1.temperature: 79.0C
+@@cpufreq
+@@aesni_cpu
+4
+@@zpool
+  pool: pfSense
+ state: DEGRADED
+status: One or more devices could not be opened.
+@@smart
+ada0 FAILED!
+ada1 PASSED
+@@bectl
+1
+@@unbound
+stopped
+@@dns_local
+@@dns_intercept
+;; ->>HEADER<<- opcode: QUERY, rcode: NOERROR, id: 4242
+example.com.	300	IN	A	192.0.2.80
+@@dnsbl_test
+domain ads.example.com
+direct
+sub
+@@sshd
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+@@ups
+ups1 OB LB
+@@ifconfig
+igb0: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mtu 1500
+	options=4e507bb<RXCSUM,TXCSUM,VLAN_MTU,TSO4,TSO6,LRO>
+igb1: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mtu 1500
+	options=4e507bb<RXCSUM,TXCSUM,VLAN_MTU,TSO4>
+@@certs
+/var/etc/cert.crt|Jan  1 00:00:00 2020 GMT
+/var/etc/openvpn/server1/cert|Nov 26 12:00:00 2099 GMT
+@@pfinfo
+  current entries                      9
+@@updates
+>>> Updating repositories metadata...
+2.9.1 version of pfSense is available
+@@dhcpscan
+12:00:00.000001 00:00:5e:00:53:66 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 192.0.2.99.67 > 255.255.255.255.68: BOOTP/DHCP, Reply, length 300

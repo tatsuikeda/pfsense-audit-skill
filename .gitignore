@@ -1,6 +1,10 @@
 # Never commit firewall data or secrets
 *.xml
+# Synthetic test configs (documentation addresses only) are the one exception
+!tests/fixtures/*.xml
 config-*
+# Release-day validation output (pfaudit JSON, exported configs)
+validation/
 *.ovpn
 *.pem
 *.key

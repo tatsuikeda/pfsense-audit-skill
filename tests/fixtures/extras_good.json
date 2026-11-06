@@ -1,0 +1,53 @@
+{
+  "_comment": "Synthetic inputs for offline tests: what external_tests(), feed_tests() and unifi_collect() would return. Documentation addresses and example.com only. Port keys are strings in JSON and converted to int by the test loader.",
+  "external": {
+    "ip": "203.0.113.2",
+    "tcp": {"21": false, "22": false, "23": false, "80": false, "443": false, "3389": false, "8080": false, "8443": false},
+    "udp": {"53": false, "123": false, "161": false, "1900": false}
+  },
+  "feeds": [["https://lists.example.com/ads.txt", ""], ["https://lists.example.com/malware.txt", ""]],
+  "unifi": {
+    "url": "https://unifi.example.com",
+    "tls": "ca-file",
+    "version": "11.0.97",
+    "errors": [],
+    "controller_hosts": ["unifi.example.com", "192.0.2.5"],
+    "integration": {
+      "site": "Default",
+      "devices": [
+        {"id": "d1", "name": "sw1", "model": "USW", "state": "ONLINE", "firmwareUpdatable": false},
+        {"id": "d2", "name": "ap1", "model": "U7", "state": "ONLINE", "firmwareUpdatable": true}
+      ],
+      "networks": [
+        {"id": "n1", "name": "LAN", "vlanId": 1, "enabled": true, "dhcpGuarding": {"trustedDhcpServerIpAddresses": ["192.0.2.1"]}},
+        {"id": "n2", "name": "Guest", "vlanId": 20, "enabled": true, "dhcpGuarding": {"trustedDhcpServerIpAddresses": ["198.51.100.1"]}},
+        {"id": "n3", "name": "Old", "vlanId": 99, "enabled": false}
+      ],
+      "wlans": [
+        {"id": "w1", "name": "Office", "enabled": true, "clientIsolationEnabled": false, "securityConfiguration": {"type": "WPA2_PERSONAL"}},
+        {"id": "w2", "name": "Visitors", "enabled": true, "clientIsolationEnabled": true, "securityConfiguration": {"type": "WPA2_PERSONAL"}, "hotspotConfiguration": {"type": "CAPTIVE_PORTAL"}}
+      ]
+    },
+    "legacy": {
+      "settings": {
+        "global_switch": {"key": "global_switch", "dhcp_snoop": true},
+        "guest_access": {"key": "guest_access", "restricted_subnet_1": "172.16.0.0/12", "restricted_subnet_2": "192.0.2.0/24", "allowed_subnet_1": "192.0.2.1/32"},
+        "mgmt": {"key": "mgmt", "auto_upgrade": false, "x_ssh_enabled": true, "x_ssh_auth_password_enabled": false}
+      },
+      "networkconf": [
+        {"name": "LAN", "purpose": "corporate", "dhcpguard_enabled": true, "dhcpd_ip_1": "192.0.2.1"},
+        {"name": "Guest", "purpose": "guest", "vlan_enabled": true, "vlan": "20", "dhcpguard_enabled": true, "dhcpd_ip_1": "198.51.100.1"},
+        {"name": "WAN", "purpose": "wan"}
+      ],
+      "wlanconf": [
+        {"name": "Office", "enabled": true, "is_guest": false, "security": "wpapsk"},
+        {"name": "Visitors", "enabled": true, "is_guest": true, "security": "wpapsk", "l2_isolation": true}
+      ],
+      "devices": [
+        {"name": "sw1", "model": "USW", "adopted": true, "state": 1, "inform_url": "http://unifi.example.com:8080/inform"},
+        {"name": "ap1", "model": "U7", "adopted": true, "state": 1, "inform_url": "http://192.0.2.5:8080/inform", "inform_ip": "192.0.2.5"},
+        {"name": "spare", "model": "U7", "adopted": false, "state": 0}
+      ]
+    }
+  }
+}

@@ -11,16 +11,19 @@ from __future__ import annotations
 import argparse
 import base64
 import http.client
+import ipaddress
 import json
 import os
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tomllib
 import urllib.error
 import urllib.request
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 # The only XML parsed is config.xml from the firewall being audited. The stdlib
 # parser does not fetch external entities, so defusedxml is not needed here.
 import xml.etree.ElementTree as ET
@@ -86,6 +89,7 @@ class Ctx:
     args: argparse.Namespace
     external: dict = field(default_factory=dict)
     feeds: list = field(default_factory=list)
+    unifi: dict = field(default_factory=dict)
 
     def get(self, path: str, default: str | None = None) -> str | None:
         el = self.root.find(path)
@@ -190,6 +194,8 @@ def _(ctx):
     if not ctx.has("system/ssh/enable"):
         return Result("PASS", "SSH disabled")
     cfg = ctx.sec("sshd").lower()
+    if not cfg:  # no lines read: cannot claim key-only (OpenSSH defaults to passwords on)
+        return Result("WARN", "SSH enabled, but sshd_config could not be read to confirm key-only login")
     pw = re.search(r"passwordauthentication\s+yes", cfg) or re.search(r"kbdinteractiveauthentication\s+yes", cfg)
     if pw:
         return Result("FAIL", "SSH enabled and accepts passwords (from sshd_config); use key-only")
@@ -220,6 +226,8 @@ def _(ctx):
 def _(ctx):
     if not ctx.external:
         return Result("SKIP", "Run with --external from outside the network")
+    if ctx.external.get("error"):
+        return Result("SKIP", f"External test not run: {ctx.external['error']}")
     opn = [p for p, ok in ctx.external.get("tcp", {}).items() if ok]
     mgmt = [p for p in opn if p in (22, 80, 443, 8080, 8443)]
     return Result("FAIL", f"Reachable from outside: TCP {mgmt}") if mgmt else Result("PASS", f"No management ports open from outside (tested {sorted(ctx.external.get('tcp', {}))})")
@@ -227,9 +235,20 @@ def _(ctx):
 
 @check("ACCESS-007")
 def _(ctx):
-    wide = [r for r in rules(ctx, "openvpn") if r.findtext("type") == "pass" and is_any(r, "destination")]
-    if wide:
-        return Result("FAIL", "VPN rule passes to any destination, including the firewall GUI and SSH")
+    # pf evaluates rules in order: a block to the firewall itself placed above
+    # the broad pass protects management even when "pass any" follows it.
+    exceptions = []
+    for r in rules(ctx, "openvpn"):
+        dst = r.find("destination")
+        to_self = dst is not None and (dst.findtext("network") or "") == "(self)"
+        if r.findtext("type") in ("block", "reject") and to_self:
+            note = f" (allowed first: {', '.join(exceptions)})" if exceptions else ""
+            return Result("PASS", "VPN users are blocked from firewall management" + note)
+        if r.findtext("type") == "pass" and is_any(r, "destination"):
+            if is_any(r, "source"):
+                return Result("FAIL", "VPN rule passes to any destination, including the firewall GUI and SSH")
+            src = r.find("source")
+            exceptions.append((src.findtext("address") or src.findtext("network") or "a specific source") if src is not None else "a specific source")
     return Result("PASS", "VPN rules are scoped")
 
 
@@ -270,6 +289,8 @@ def _(ctx):
 def _(ctx):
     if not ctx.external:
         return Result("SKIP", "Run with --external from outside the network")
+    if ctx.external.get("error"):
+        return Result("SKIP", f"External test not run: {ctx.external['error']}")
     rep = [p for p, ok in ctx.external.get("udp", {}).items() if ok]
     return Result("WARN", f"UDP services answer from outside: {rep}") if rep else Result("PASS", "No UDP replies from outside")
 
@@ -647,15 +668,283 @@ def _(ctx):
     if not ctx.has("installedpackages/nut/config"):
         return Result("SKIP", "NUT not configured")
     st = ctx.sec("ups")
-    if " OL" not in f" {st}" and "OL" not in st:
+    # One "<name> <status flags>" line per UPS; every UPS must report OL.
+    rows = [line.split()[1:] for line in st.splitlines() if line.strip()]
+    if not rows or any("OL" not in flags for flags in rows):
         return Result("FAIL", f"UPS status: {st or 'no response'}")
     if ctx.get("installedpackages/nut/config/email") != "yes":
         return Result("WARN", "UPS online but power-event emails are off (lesson 4)")
     return Result("PASS", f"UPS online, alerts on ({st})")
 
 
-for _cid in ("UNIFI-001", "UNIFI-002", "UNIFI-003", "UNIFI-004", "UNIFI-005", "UNIFI-007"):
-    CHECKS[_cid] = lambda ctx: Result("SKIP", "Needs UniFi controller access (not yet implemented)")
+IPV4 = re.compile(r"\d+\.\d+\.\d+\.\d+")
+GUEST_NAME = re.compile(r"guest|visitor|public|hotspot", re.I)
+
+
+def fw_lan_ip(ctx) -> str | None:
+    ip = ctx.get("interfaces/lan/ipaddr") or ""
+    return ip if IPV4.fullmatch(ip) else None
+
+
+def fw_vlan_ips(ctx) -> dict[int, str]:
+    """VLAN tag to firewall interface address, from vlans/vlan and interfaces/*."""
+    tags = {}
+    for v in ctx.all("vlans/vlan"):
+        tag = (v.findtext("tag") or "").strip()
+        if tag.isdigit():
+            tags[(v.findtext("vlanif") or "").strip()] = int(tag)
+    out = {}
+    ifs = ctx.root.find("interfaces")
+    for i in ifs if ifs is not None else []:
+        ip = (i.findtext("ipaddr") or "").strip()
+        tag = tags.get((i.findtext("if") or "").strip())
+        if tag is not None and IPV4.fullmatch(ip):
+            out[tag] = ip
+    return out
+
+
+def fw_ip_for_vlan(ctx, vlan: int | None) -> str | None:
+    """Firewall address a UniFi network should trust: its VLAN interface, or LAN when untagged."""
+    if vlan in (None, 0, 1):
+        return fw_lan_ip(ctx)
+    return fw_vlan_ips(ctx).get(vlan)
+
+
+def _unifi(ctx, part: str | None = None):
+    """(data, None) when UniFi data is usable, else (None, SKIP result)."""
+    if not getattr(ctx.args, "unifi", None):
+        return None, Result("SKIP", "Run with --unifi https://<controller> and --unifi-key-env to read the UniFi controller")
+    u = ctx.unifi or {}
+    if u.get("fatal"):
+        return None, Result("SKIP", f"UniFi: {u['fatal']}")
+    if part and not u.get(part):
+        why = "; ".join(u.get("errors", [])) or "no data returned"
+        return None, Result("SKIP", f"Needs the UniFi {part} API, which was not available ({why[:200]})")
+    return u, None
+
+
+def _as_bool(v) -> bool:
+    return v is True or str(v).lower() in ("true", "1", "yes", "on")
+
+
+def _vlan(v) -> int | None:
+    return int(v) if str(v).strip().isdigit() else None
+
+
+def unifi_networks(u: dict) -> tuple[list[dict] | None, str]:
+    """Networks as {name, vlan, enabled, guard, trusted, purpose}, Integration API first."""
+    nets = (u.get("integration") or {}).get("networks")
+    if nets is not None:
+        out = []
+        for n in nets:
+            g = n.get("dhcpGuarding")
+            trusted = [str(x) for x in (g or {}).get("trustedDhcpServerIpAddresses") or []] if isinstance(g, dict) else []
+            out.append({"name": n.get("name") or n.get("id") or "?", "vlan": _vlan(n.get("vlanId")), "enabled": n.get("enabled", True) is not False,
+                        "guard": bool(trusted), "trusted": trusted, "purpose": ""})
+        return out, "Integration API"
+    legacy = (u.get("legacy") or {}).get("networkconf")
+    if legacy is not None:
+        out = []
+        for n in legacy:
+            purpose = (n.get("purpose") or "").lower()
+            if purpose in ("wan", "remote-user-vpn", "site-vpn", "vpn-client"):
+                continue
+            vlan = _vlan(n.get("vlan")) if n.get("vlan_enabled", True) is not False else None
+            trusted = [str(n[k]) for k in ("dhcpd_ip_1", "dhcpd_ip_2", "dhcpd_ip_3") if n.get(k)]
+            out.append({"name": n.get("name") or "?", "vlan": vlan, "enabled": n.get("enabled", True) is not False,
+                        "guard": _as_bool(n.get("dhcpguard_enabled")), "trusted": trusted, "purpose": purpose})
+        return out, "legacy API"
+    return None, ""
+
+
+@check("UNIFI-001")
+def _(ctx):
+    u, skip = _unifi(ctx)
+    if skip:
+        return skip
+    nets, src = unifi_networks(u)
+    if nets is None:
+        return Result("SKIP", "No UniFi network data (needs Network 10.0 or newer for the Integration API, or the legacy API): " + "; ".join(u.get("errors", []))[:200])
+    off, wrong, ok, unmapped = [], [], [], []
+    for n in nets:
+        if not n["enabled"]:
+            continue
+        want = fw_ip_for_vlan(ctx, n["vlan"])
+        if want is None:
+            unmapped.append(n["name"])
+        elif not n["guard"]:
+            off.append(f"{n['name']} (VLAN {n['vlan'] or 'untagged'})")
+        elif want not in n["trusted"]:
+            wrong.append(f"{n['name']} trusts {', '.join(n['trusted']) or 'nothing'}, firewall is {want}")
+        else:
+            ok.append(n["name"])
+    note = f" (source: {src}" + (f"; no firewall interface for: {', '.join(unmapped)}" if unmapped else "") + ")"
+    if off:
+        return Result("FAIL", "DHCP Guarding off on: " + "; ".join(off) + note)
+    if wrong:
+        return Result("WARN", "DHCP Guarding trusts the wrong server: " + "; ".join(wrong) + " (lesson 20)" + note)
+    if not ok:
+        return Result("INFO", "No UniFi network matched a firewall interface" + note)
+    return Result("PASS", f"DHCP Guarding on with the firewall trusted: {', '.join(ok)}" + note)
+
+
+@check("UNIFI-002")
+def _(ctx):
+    u, skip = _unifi(ctx, "legacy")
+    if skip:
+        return skip
+    sw = (u["legacy"].get("settings") or {}).get("global_switch")
+    if sw is None or "dhcp_snoop" not in sw:
+        return Result("SKIP", "global_switch setting not returned by the controller")
+    return Result("PASS", "DHCP Snooping on") if _as_bool(sw["dhcp_snoop"]) else Result("WARN", "DHCP Snooping off on UniFi switches (lesson 17)")
+
+
+@check("UNIFI-003")
+def _(ctx):
+    u, skip = _unifi(ctx)
+    if skip:
+        return skip
+    intended = {s.lower() for s in getattr(ctx.args, "unifi_open_ssid", None) or []}
+    fails, warns, infos = [], [], []
+    legacy = (u.get("legacy") or {}).get("wlanconf")
+    integ = (u.get("integration") or {}).get("wlans")
+    if legacy is not None:
+        src = "legacy API"
+        wlans = [{"name": w.get("name") or "?", "guest": _as_bool(w.get("is_guest")), "open": (w.get("security") or "").lower() == "open",
+                  "iso": _as_bool(w.get("l2_isolation"))} for w in legacy if w.get("enabled", True) is not False]
+    elif integ is not None:
+        # hotspotConfiguration is CAPTIVE_PORTAL or PASSPOINT (11.0.97 spec). Passpoint
+        # (Hotspot 2.0) uses enterprise authentication and is not a guest network.
+        src = "Integration API; it has no guest flag, so a captive portal counts as guest"
+        wlans = [{"name": w.get("name") or "?",
+                  "guest": isinstance(w.get("hotspotConfiguration"), dict)
+                  and str(w["hotspotConfiguration"].get("type") or "").upper() == "CAPTIVE_PORTAL",
+                  "open": ((w.get("securityConfiguration") or {}).get("type") or "").upper() == "OPEN",
+                  "iso": _as_bool(w.get("clientIsolationEnabled"))} for w in integ if w.get("enabled", True) is not False]
+    else:
+        return Result("SKIP", "No UniFi Wi-Fi data: " + "; ".join(u.get("errors", []))[:200])
+    for w in wlans:
+        name = w["name"]
+        if w["open"] and name.lower() in intended:
+            infos.append(f"{name} is open by intent")
+        elif w["open"] and w["guest"]:
+            fails.append(f"guest SSID {name} is open (no password)")
+        elif w["open"]:
+            warns.append(f"SSID {name} is open")
+        if w["guest"] and not w["iso"]:
+            warns.append(f"guest SSID {name} has client isolation off")
+        if not w["guest"] and legacy is not None and GUEST_NAME.search(name):
+            warns.append(f"{name} looks like a guest SSID but is not marked guest")
+    guests = [w["name"] for w in wlans if w["guest"]]
+    note = f" (source: {src})"
+    if fails:
+        return Result("FAIL", "; ".join(fails + warns) + " (lesson 19)" + note)
+    if warns:
+        return Result("WARN", "; ".join(warns + infos) + note)
+    if not guests:
+        return Result("INFO", "No SSID is marked guest" + ("; " + "; ".join(infos) if infos else "") + note)
+    return Result("PASS", f"Guest SSIDs marked and password protected: {', '.join(guests)}" + ("; " + "; ".join(infos) if infos else "") + note)
+
+
+def guest_subnets(section: dict, kind: str) -> list:
+    """Parse restricted_subnet / allowed_subnet, single or numbered (_1.._n), string or list."""
+    nets = []
+    for k, v in section.items():
+        if not re.fullmatch(rf"{kind}_subnet(_\d+)?", k):
+            continue
+        for item in v if isinstance(v, list) else re.split(r"[,\s]+", str(v or "")):
+            try:
+                nets.append(ipaddress.ip_network(str(item).strip(), strict=False))
+            except ValueError:
+                continue
+    return nets
+
+
+@check("UNIFI-004")
+def _(ctx):
+    u, skip = _unifi(ctx, "legacy")
+    if skip:
+        return skip
+    leg = u["legacy"]
+    ga = (leg.get("settings") or {}).get("guest_access")
+    if ga is None:
+        return Result("SKIP", "guest_access setting not returned by the controller")
+    guest_wlans = [w for w in leg.get("wlanconf") or [] if _as_bool(w.get("is_guest"))]
+    guest_nets = [n for n in leg.get("networkconf") or [] if (n.get("purpose") or "").lower() == "guest"]
+    if not guest_wlans and not guest_nets:
+        return Result("INFO", "No guest SSIDs or guest networks, so guest restrictions are not in use")
+    fw = {ip for ip in [fw_lan_ip(ctx)] + [fw_ip_for_vlan(ctx, _vlan(n.get("vlan"))) for n in guest_nets] if ip}
+    if not fw:
+        return Result("SKIP", "No firewall LAN address in config to compare")
+    restricted, allowed = guest_subnets(ga, "restricted"), guest_subnets(ga, "allowed")
+    blocked = sorted(ip for ip in fw if any(ipaddress.ip_address(ip) in n for n in restricted)
+                     and not any(ipaddress.ip_address(ip) in n for n in allowed))
+    if blocked:
+        return Result("WARN", f"Guest restricted subnets include the firewall ({', '.join(blocked)}) and it is not in Allowed subnets; guests can lose DNS and DHCP (lesson 19)")
+    return Result("PASS", f"Firewall {', '.join(sorted(fw))} reachable for guests ({len(restricted)} restricted, {len(allowed)} allowed subnets)")
+
+
+LEGACY_BAD_STATE = {0: "disconnected", 9: "inform error", 10: "adoption failed", 11: "isolated"}
+
+
+@check("UNIFI-005")
+def _(ctx):
+    u, skip = _unifi(ctx)
+    if skip:
+        return skip
+    expect = set(u.get("controller_hosts") or [])
+    legacy = (u.get("legacy") or {}).get("devices")
+    if legacy is not None:
+        wrong, bad, ok = [], [], 0
+        for d in legacy:
+            if d.get("adopted") is False:
+                continue
+            name = d.get("name") or d.get("model") or "device"
+            host = urlsplit(str(d.get("inform_url") or "")).hostname or ""
+            ip = str(d.get("inform_ip") or "")
+            if not host and not ip:
+                bad.append(f"{name} reports no inform address")
+            elif not ({host, ip} & expect):
+                wrong.append(f"{name} informs to {host or ip}")
+            else:
+                ok += 1
+            st = d.get("state")
+            if isinstance(st, int) and st in LEGACY_BAD_STATE:
+                bad.append(f"{name} {LEGACY_BAD_STATE[st]}")
+        if wrong or bad:
+            return Result("WARN", "; ".join(wrong + bad) + f" (controller: {', '.join(sorted(expect))})")
+        return Result("PASS", f"{ok} devices inform to {', '.join(sorted(expect))} (source: legacy API)")
+    devs = (u.get("integration") or {}).get("devices")
+    if devs is None:
+        return Result("SKIP", "No UniFi device data: " + "; ".join(u.get("errors", []))[:200])
+    down = [f"{d.get('name') or d.get('model') or 'device'} {d.get('state')}" for d in devs if d.get("state") not in ("ONLINE", None)]
+    if down:
+        return Result("WARN", f"Devices not online: {'; '.join(down)}; the inform host needs the legacy API")
+    return Result("INFO", f"{len(devs)} devices online; the inform host is only exposed by the legacy API, so it was not compared")
+
+
+@check("UNIFI-007")
+def _(ctx):
+    u, skip = _unifi(ctx)
+    if skip:
+        return skip
+    parts = []
+    mgmt = ((u.get("legacy") or {}).get("settings") or {}).get("mgmt")
+    if mgmt is not None and "auto_upgrade" in mgmt:
+        if _as_bool(mgmt["auto_upgrade"]):
+            hour = mgmt.get("auto_upgrade_hour")
+            parts.append("Device auto-upgrade on" + (f" at hour {hour}" if hour is not None else "") + "; switches and APs reboot on their own")
+        else:
+            parts.append("Device auto-upgrade off; schedule firmware updates yourself")
+        if _as_bool(mgmt.get("x_ssh_enabled")):
+            parts.append("device SSH on" + (" and accepts passwords (keys only recommended)" if _as_bool(mgmt.get("x_ssh_auth_password_enabled")) else ", key only"))
+    else:
+        parts.append("Auto-upgrade setting is only exposed by the legacy API" + (": " + "; ".join(u.get("errors", []))[:160] if u.get("errors") else ""))
+    devs = (u.get("integration") or {}).get("devices")
+    if devs:
+        n = sum(1 for d in devs if d.get("firmwareUpdatable"))
+        parts.append(f"{n} of {len(devs)} devices have a firmware update available")
+    return Result("INFO", "; ".join(parts))
 
 
 @check("UNIFI-006")
@@ -673,10 +962,10 @@ def _(ctx):
 
 
 def external_tests(ctx: Ctx) -> dict:
-    ip = ctx.get("interfaces/wan/ipaddr") or ""
+    # --wan-ip first: it exists for the dynamic WAN case (ipaddr "dhcp" or "pppoe").
+    ip = getattr(ctx.args, "wan_ip", None) or ctx.get("interfaces/wan/ipaddr") or ""
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip):
         return {"error": "WAN address is dynamic; pass --wan-ip"}
-    ip = ctx.args.wan_ip or ip
     tcp = {}
     for p in (21, 22, 23, 80, 443, 3389, 8080, 8443):
         with socket.socket() as s:
@@ -791,6 +1080,189 @@ def feed_tests(ctx: Ctx) -> list:
     return out
 
 
+# ---------------------------------------------------------------------- UniFi
+#
+# Read-only collector for a UniFi Network controller on UniFi OS (Cloud Key,
+# UDM, UCG, UniFi OS Server). Every request is a GET with an X-API-KEY header:
+#   Integration API: /proxy/network/integration/v1/...  (documented, Network 10.0+
+#     for networks and Wi-Fi; spec checked: developer.ui.com/network/v11.0.97)
+#   legacy API: /proxy/network/api/s/<site>/...  (undocumented; whether it
+#     accepts an API key is unconfirmed, see README)
+# There is no session login, because that needs a POST. Secret fields are
+# dropped as soon as a response is decoded, and nothing is written to disk.
+
+UNIFI_INT = "/proxy/network/integration"
+UNIFI_KEEP = {"x_ssh_enabled", "x_ssh_auth_password_enabled", "x_ssh_bind_wildcard"}
+UNIFI_SECRET = re.compile(r"^x_|passphrase|presharedkey|password|passwd|secret|psk|private_?key|token", re.I)
+
+
+def unifi_scrub(obj):
+    """Drop secret fields (x_passphrase, x_ssh_password, passphrase, presharedKeys ...)."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k in UNIFI_KEEP:
+                out[k] = _as_bool(v)
+            elif not (isinstance(k, str) and UNIFI_SECRET.search(k)):
+                out[k] = unifi_scrub(v)
+        return out
+    if isinstance(obj, list):
+        return [unifi_scrub(v) for v in obj]
+    return obj
+
+
+class UnifiError(Exception):
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    # urllib copies request headers, including X-API-KEY, onto a redirect, so
+    # refuse every redirect (raising HTTPError is the documented way).
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+class UnifiClient:
+    MAX_BYTES = 20_000_000
+
+    def __init__(self, base: str, key: str, cafile: str | None = None, insecure: bool = False, timeout: int = 20):
+        p = urlsplit(base)
+        if p.scheme != "https" or not p.hostname:
+            raise UnifiError("--unifi must be an https:// URL")
+        if p.username or p.password or p.query:
+            raise UnifiError("--unifi must not contain credentials or a query string")
+        self.base = urlunsplit(("https", p.netloc, p.path.rstrip("/"), "", ""))
+        self.host = p.hostname
+        if insecure:
+            tls = ssl.create_default_context()
+            tls.check_hostname = False  # must come before CERT_NONE
+            tls.verify_mode = ssl.CERT_NONE
+        else:
+            tls = ssl.create_default_context(cafile=cafile)
+        self.tls = "insecure" if insecure else ("ca-file" if cafile else "system trust")
+        self._key = key
+        self._timeout = timeout
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=tls), _NoRedirect)
+
+    def get(self, path: str, params: dict | None = None):
+        url = self.base + path + ("?" + urlencode(params) if params else "")
+        req = urllib.request.Request(url, method="GET", headers={"X-API-KEY": self._key, "Accept": "application/json", "User-Agent": f"pfaudit/{VERSION}"})
+        try:
+            with self._opener.open(req, timeout=self._timeout) as r:
+                body = r.read(self.MAX_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            raise UnifiError(f"HTTP {e.code} on {path}" + (" (redirect not followed)" if 300 <= e.code < 400 else ""), e.code) from None
+        except urllib.error.URLError as e:
+            reason = e.reason
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                why = str(reason.verify_message or reason).rstrip(".")
+                if "hostname" in why.lower():
+                    hint = " Use the name the certificate was issued for in the --unifi URL."
+                else:
+                    hint = " Pass --unifi-ca with the console certificate, or --unifi-insecure."
+                    if sys.version_info >= (3, 13):
+                        hint += " Python 3.13+ applies strict X.509 checks, which some self-signed console certificates fail."
+                raise UnifiError(f"TLS verification failed for {self.host}: {why}.{hint}") from None
+            raise UnifiError(f"cannot reach {self.host}: {reason}") from None
+        except (OSError, http.client.HTTPException) as e:
+            raise UnifiError(f"cannot reach {self.host}: {type(e).__name__}") from None
+        if len(body) > self.MAX_BYTES:
+            raise UnifiError(f"response too large on {path}")
+        try:
+            return unifi_scrub(json.loads(body))
+        except ValueError:
+            raise UnifiError(f"non-JSON response on {path}") from None
+
+    def pages(self, path: str) -> list:
+        """All items of an Integration API list (offset/limit, limit max 200)."""
+        out, offset = [], 0
+        for _ in range(100):
+            d = self.get(path, {"offset": offset, "limit": 200})
+            data = d.get("data") if isinstance(d, dict) else None
+            if not isinstance(data, list) or not data:
+                break
+            out += data
+            offset += len(data)
+            if offset >= int(d.get("totalCount") or 0):
+                break
+        return out
+
+    def legacy(self, path: str) -> list:
+        """A legacy API call; unwraps {meta: {rc}, data: [...]}."""
+        d = self.get(path)
+        if isinstance(d, dict) and isinstance(d.get("meta"), dict) and d["meta"].get("rc") not in (None, "ok"):
+            raise UnifiError(f"{path}: {d['meta'].get('msg') or d['meta'].get('rc')}")
+        data = d.get("data") if isinstance(d, dict) else d
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+
+
+def _version(v: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+
+
+def unifi_collect(client, site: str) -> dict:
+    """Fetch what the UNIFI checks need. Returns plain dicts, secrets removed."""
+    u = {"url": safe_url(client.base), "tls": client.tls, "version": None, "errors": [], "integration": None, "legacy": None,
+         "controller_hosts": [client.host]}
+    try:
+        u["controller_hosts"] += sorted({i[4][0] for i in socket.getaddrinfo(client.host, None)} - {client.host})
+    except OSError:
+        pass
+    try:
+        info = client.get(UNIFI_INT + "/v1/info")
+        u["version"] = str((info or {}).get("applicationVersion") or "") or None
+        sites = client.pages(UNIFI_INT + "/v1/sites")
+        match = [s for s in sites if site in (s.get("internalReference"), s.get("name"))] or (sites if len(sites) == 1 else [])
+        if not match or not match[0].get("id"):
+            u["errors"].append(f"Integration API: site {site!r} not found")
+        else:
+            base = f"{UNIFI_INT}/v1/sites/{quote(str(match[0]['id']), safe='')}"
+            u["integration"] = integ = {"site": match[0].get("name"), "devices": client.pages(base + "/devices")}
+            # The first published spec with networks and Wi-Fi is 10.0.162 (9.5.21
+            # has neither); earlier 10.0 builds are untested, so try them and let a
+            # 404 drop only that part. Each part is all or nothing: a partial list
+            # would let a check pass on networks it never saw, so on any failure
+            # the key is left out and the checks fall back to the legacy API.
+            if _version(u["version"] or "") >= (10, 0):
+                for key, path in (("networks", "/networks"), ("wlans", "/wifi/broadcasts")):
+                    try:
+                        integ[key] = [client.get(f"{base}{path}/{quote(str(x['id']), safe='')}") for x in client.pages(base + path) if x.get("id")]
+                    except UnifiError as e:
+                        u["errors"].append(f"Integration API {key}: {e}")
+            else:
+                u["errors"].append(f"Integration API {u['version'] or 'unknown version'} has no networks or Wi-Fi (needs 10.0+)")
+    except UnifiError as e:
+        u["errors"].append(f"Integration API: {e}")
+    leg, prefix = {}, f"/proxy/network/api/s/{quote(site, safe='')}"
+    for name, path in (("settings", "/get/setting"), ("networkconf", "/rest/networkconf"), ("wlanconf", "/rest/wlanconf"), ("devices", "/stat/device")):
+        try:
+            rows = client.legacy(prefix + path)
+        except UnifiError as e:
+            u["errors"].append(f"legacy API: {e}")
+            if e.status in (401, 403) or (e.status and 300 <= e.status < 400):
+                break  # the key is refused here; do not keep knocking
+            continue
+        leg[name] = {r.get("key"): r for r in rows if r.get("key")} if name == "settings" else rows
+    u["legacy"] = leg or None
+    return u
+
+
+def unifi_from_args(args) -> dict:
+    key = os.environ.get(args.unifi_key_env or "", "")
+    if not key:
+        return {"fatal": f"no API key in environment variable {args.unifi_key_env}", "tls": "n/a", "errors": []}
+    try:
+        client = UnifiClient(args.unifi, key, cafile=args.unifi_ca, insecure=args.unifi_insecure)
+    except (UnifiError, OSError, ssl.SSLError) as e:
+        return {"fatal": str(e), "tls": "n/a", "errors": []}
+    u = unifi_collect(client, args.unifi_site)
+    if not u["integration"] and not u["legacy"]:
+        u["fatal"] = "; ".join(u["errors"])[:300] or "no data"
+    return u
+
+
 # --------------------------------------------------------------------- report
 
 ORDER = {"FAIL": 0, "WARN": 1, "INFO": 2, "PASS": 3, "SKIP": 4}
@@ -820,6 +1292,10 @@ def markdown(results, ctx) -> str:
     out = [f"# pfSense audit: {host.rstrip('.')}", "",
            f"pfSense {ctx.version} · {datetime.now().strftime('%Y-%m-%d %H:%M')} · pfaudit {VERSION}", "",
            " · ".join(f"{ICON[k]} {counts[k]} {k}" for k in ORDER), ""]
+    if ctx.unifi:
+        out += [f"UniFi controller {ctx.unifi.get('url', '?')} · Network {ctx.unifi.get('version') or 'unknown'} · TLS {ctx.unifi.get('tls')}", ""]
+        if ctx.unifi.get("tls") == "insecure":
+            out += ["> [!WARNING]", "> UniFi TLS verification was disabled with `--unifi-insecure`. The controller's identity was not checked, so these UniFi results and the API key were exposed to anyone able to intercept the connection.", ""]
     for status, title in (("FAIL", "Fix now"), ("WARN", "Fix soon"), ("INFO", "For your information"), ("PASS", "Good"), ("SKIP", "Not checked")):
         rows = [r for r in results if r["status"] == status]
         if not rows:
@@ -847,8 +1323,16 @@ def main():
     ap.add_argument("--feeds", action="store_true", help="Test pfBlockerNG feed URLs")
     ap.add_argument("--updates", action="store_true", help="Ask the firewall to check for updates (slow)")
     ap.add_argument("--dhcp-scan", action="store_true", help="Listen 45 s on LAN for other DHCP servers")
+    ap.add_argument("--unifi", metavar="URL", help="UniFi OS console base URL, e.g. https://unifi.example.com (read-only GETs)")
+    ap.add_argument("--unifi-key-env", metavar="NAME", default="UNIFI_API_KEY", help="Environment variable holding the UniFi API key (default UNIFI_API_KEY)")
+    ap.add_argument("--unifi-site", default="default", help="UniFi site short name (internalReference), default 'default'")
+    ap.add_argument("--unifi-ca", metavar="FILE", help="CA bundle or the console's certificate for TLS verification")
+    ap.add_argument("--unifi-insecure", action="store_true", help="Skip UniFi TLS verification (explicit opt-in; flagged in the report)")
+    ap.add_argument("--unifi-open-ssid", metavar="NAME", action="append", help="SSID that is open on purpose (UNIFI-003 reports it as INFO), repeatable")
     ap.add_argument("--json", action="store_true", help="JSON output instead of Markdown")
     args = ap.parse_args()
+    if args.unifi_insecure and args.unifi_ca:
+        ap.error("--unifi-insecure and --unifi-ca cannot be combined")
 
     catalog = tomllib.loads((HERE / "checks.toml").read_text())["checks"]
     sections = split_sections(run_remote(args, REMOTE_SCRIPT))
@@ -870,11 +1354,16 @@ def main():
         ctx.external = external_tests(ctx)
     if args.feeds:
         ctx.feeds = feed_tests(ctx)
+    if args.unifi:
+        ctx.unifi = unifi_from_args(args)
 
     results = build(catalog, ctx)
     del root  # the config never leaves memory and is not kept
     if args.json:
-        print(json.dumps({"version": ctx.version, "pfaudit": VERSION, "results": results}, indent=2, default=str))
+        doc = {"version": ctx.version, "pfaudit": VERSION, "results": results}
+        if ctx.unifi:  # summary only; raw controller data is never output
+            doc["unifi"] = {k: ctx.unifi.get(k) for k in ("url", "version", "tls", "errors", "fatal")}
+        print(json.dumps(doc, indent=2, default=str))
     else:
         print(markdown(results, ctx))
     sys.exit(1 if any(r["status"] == "FAIL" for r in results) else 0)

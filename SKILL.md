@@ -1,6 +1,6 @@
 ---
 name: pfsense-audit
-description: Read-only security and reliability audit of a pfSense firewall over SSH, with a prioritized report and plain-language fixes. Use when the user asks to audit, review, health-check or harden a pfSense firewall, check its backups, DNS filtering, VPN, pfBlockerNG feeds or UPS monitoring, or check for a rogue DHCP server. Works on pfSense CE 2.9, Plus 26.x and 26.10.
+description: Read-only security and reliability audit of a pfSense firewall over SSH, with a prioritized report and plain-language fixes. Use when the user asks to audit, review, health-check or harden a pfSense firewall, check its backups, DNS filtering, VPN, pfBlockerNG feeds or UPS monitoring, or check for a rogue DHCP server. Tested on pfSense CE 2.9.0. Plus 26.x and 26.10 are not yet validated (known gaps in docs/VALIDATING-26.10.md).
 ---
 
 # pfSense audit
@@ -22,7 +22,16 @@ Optional flags, add them when the user wants a deeper check:
 | `--feeds` | pfBlockerNG is in use; tests every feed for dead or empty lists |
 | `--updates` | the user wants to know about pending pfSense updates (slow) |
 | `--dhcp-scan` | there are signs of a rogue DHCP server, or any UniFi or mixed network (listens 45 s) |
+| `--unifi https://<console>` | the site has UniFi switches or Wi-Fi managed by a UniFi OS console (Cloud Key, UDM, UCG, UniFi OS Server); runs UNIFI-001 to 005 and 007 |
 | `--json` | you want to post-process the results |
+
+### UniFi controller access
+
+- Use `--unifi` only when the user confirms a UniFi OS console manages the switches or APs. Without it the UniFi checks report SKIP, which is fine.
+- **Never ask for the API key in the chat, and never put it on the command line.** Ask the user to create a dedicated local admin with the least role that can create keys, create the key under Network > Settings > Control Plane > Integrations, and load it themselves with `read -rs UNIFI_API_KEY && export UNIFI_API_KEY`. Then pass `--unifi-key-env UNIFI_API_KEY` (the default). A key carries all the rights of the admin who created it; suggest deleting it after the audit.
+- TLS: ask for the console certificate or CA file and pass `--unifi-ca FILE`. Only use `--unifi-insecure` if the user explicitly accepts unverified TLS, and say so in the summary.
+- If a guest SSID is open on purpose (a click-through portal by design), pass `--unifi-open-ssid NAME` rather than explaining the failure away.
+- The audit only sends GET requests and drops passphrases and SSH secrets on arrival. If the legacy API refuses the key, say which checks were skipped; do not try to log in with a password instead.
 
 ## Run
 
@@ -40,9 +49,10 @@ python3 "<skill dir>/pfaudit.py" <host> [--user admin] [--identity ~/.ssh/key] [
 2. List 🔴 **Fix now** items first, then 🟠 **Fix soon**. For each: what is wrong, why it matters for this kind of site, and the fix with its impact (what restarts or drops). Use the `fix` and `impact` text from the report.
 3. Summarize 🟢 passes in one line unless the user asks for detail.
 4. Mention ⚪ skipped checks only when a flag would cover them (for example "run again with `--feeds`").
-5. Match the user's environment. A small office has different priorities from a clinic or a site with cameras and door controllers. Say when a finding is a judgement call rather than a rule.
+5. If the firewall is not CE 2.9.0, say the results are provisional. On Plus and 26.10, VPN-006 "DCO not loaded" is a known false WARN (see `docs/VALIDATING-26.10.md`).
+6. Match the user's environment. A small office has different priorities from a clinic or a site with cameras and door controllers. Say when a finding is a judgement call rather than a rule.
 
-Never paste `config.xml`, password hashes, keys or certificates into the conversation. The report is built to leave them out; keep it that way.
+Never paste `config.xml`, password hashes, keys, API keys or certificates into the conversation. The report is built to leave them out; keep it that way.
 
 ## Fixing findings
 

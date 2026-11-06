@@ -1,0 +1,141 @@
+<?xml version="1.0"?>
+<!--
+  Synthetic pfSense CE 2.9 style config.xml for offline tests. Not taken from
+  any real firewall: documentation addresses (RFC 5737), example.com names,
+  and placeholder hashes only. "Bad" variant: every check should report FAIL
+  or WARN where the check can, and INFO or SKIP where it cannot.
+-->
+<pfsense>
+	<version>24.6</version>
+	<system>
+		<hostname>fw-bad</hostname>
+		<domain>example.com</domain>
+		<webgui>
+			<protocol>http</protocol>
+			<session_timeout>0</session_timeout>
+			<ssl-certref>certgui01</ssl-certref>
+		</webgui>
+		<ssh>
+			<enable>enabled</enable>
+		</ssh>
+		<user>
+			<name>admin</name>
+			<uid>0</uid>
+			<bcrypt-hash>FIXTURE-NOT-A-REAL-HASH-0</bcrypt-hash>
+		</user>
+		<user>
+			<name>frontdesk</name>
+			<uid>2000</uid>
+		</user>
+		<group>
+			<name>admins</name>
+			<member>0</member>
+		</group>
+		<dnsallowoverride></dnsallowoverride>
+		<ipv6allow></ipv6allow>
+		<statepolicy>floating</statepolicy>
+	</system>
+	<interfaces>
+		<wan>
+			<if>igb0</if>
+			<ipaddr>203.0.113.2</ipaddr>
+			<ipaddrv6>dhcp6</ipaddrv6>
+			<gateway>WANGW</gateway>
+		</wan>
+		<lan>
+			<if>igb1</if>
+			<ipaddr>192.0.2.1</ipaddr>
+		</lan>
+	</interfaces>
+	<filter>
+		<rule>
+			<type>pass</type>
+			<interface>wan</interface>
+			<protocol>tcp</protocol>
+			<source><any></any></source>
+			<destination><network>wanip</network><port>443</port></destination>
+			<descr>Remote GUI</descr>
+		</rule>
+		<rule>
+			<type>pass</type>
+			<interface>openvpn</interface>
+			<source><any></any></source>
+			<destination><any></any></destination>
+			<descr>Allow all VPN</descr>
+		</rule>
+	</filter>
+	<nat>
+		<rule>
+			<interface>wan</interface>
+			<protocol>tcp</protocol>
+			<destination><network>wanip</network><port>3389</port></destination>
+			<target>192.0.2.30</target>
+			<descr>RDP</descr>
+		</rule>
+	</nat>
+	<openvpn>
+		<openvpn-server>
+			<vpnid>1</vpnid>
+			<description>RemoteAccess</description>
+			<authmode>Local Database</authmode>
+			<tls_type>auth</tls_type>
+			<digest>SHA1</digest>
+			<data_ciphers>AES-256-GCM,AES-256-CBC</data_ciphers>
+			<data_ciphers_fallback>AES-256-CBC</data_ciphers_fallback>
+			<dh_length>1024</dh_length>
+			<certref>certvpn01</certref>
+		</openvpn-server>
+		<openvpn-server>
+			<vpnid>2</vpnid>
+			<description>Retired</description>
+			<disable></disable>
+		</openvpn-server>
+	</openvpn>
+	<cert>
+		<refid>certgui01</refid>
+		<descr>GUI certificate</descr>
+	</cert>
+	<cert>
+		<refid>certvpn01</refid>
+		<descr>VPN server certificate</descr>
+	</cert>
+	<unbound>
+		<enable></enable>
+		<forwarding></forwarding>
+		<dnssec></dnssec>
+		<custom_options>cHJpdmF0ZS1kb21haW46ICJleGFtcGxlLmNvbSIK</custom_options>
+	</unbound>
+	<gateways>
+		<gateway_item>
+			<name>WANGW</name>
+			<interface>wan</interface>
+			<gateway>203.0.113.1</gateway>
+		</gateway_item>
+	</gateways>
+	<notifications>
+		<certexpire>
+			<enable>disabled</enable>
+		</certexpire>
+	</notifications>
+	<syslog></syslog>
+	<installedpackages>
+		<pfblockerngdnsblsettings>
+			<config>
+				<pfb_dnsbl>on</pfb_dnsbl>
+				<dnsbl_mode>dnsbl_unbound</dnsbl_mode>
+				<pfb_dnsvip>198.51.100.250</pfb_dnsvip>
+				<pfb_tld>off</pfb_tld>
+			</config>
+		</pfblockerngdnsblsettings>
+		<pfblockerngipsettings>
+			<config>
+				<killstates>off</killstates>
+			</config>
+		</pfblockerngipsettings>
+		<nut>
+			<config>
+				<email>no</email>
+			</config>
+		</nut>
+	</installedpackages>
+</pfsense>
