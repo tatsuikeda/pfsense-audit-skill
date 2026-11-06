@@ -165,7 +165,7 @@ flowchart LR
 
 ## 🗺️ Roadmap
 
-- [x] `LESSONS.md`: 25 traps, written up with symptoms and fixes
+- [x] `LESSONS.md`: 26 traps, written up with symptoms and fixes
 - [x] `checks.toml`: 56 checks with versions, risk, verify and fix steps (50 with a confirmed version, 5 unverified, 1 manual)
 - [x] Read-only UniFi controller checks (`--unifi`)
 - [ ] UniFi checks run against a live console (lab test of API key access to the legacy API)

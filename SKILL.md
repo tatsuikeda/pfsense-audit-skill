@@ -60,7 +60,9 @@ Never paste `config.xml`, password hashes, keys, API keys or certificates into t
 
 The audit never changes anything. Only make changes when the user explicitly asks, one finding at a time, and say what will restart first. Before changing a firewall:
 
-- Take a config backup and, on ZFS, a boot environment (`bectl create`).
+- **Before:** on ZFS, create a boot environment named for the change (`bectl create pre-<change>-<YYYYMMDD>`). Every `write_config` already keeps the previous config in `/cf/conf/backup`, so the boot environment is what covers packages, files and the OS. Do not copy `config.xml` to this machine as a backup: it holds password hashes and keys. ACB and the box's own history are the config backups.
+- **After:** re-run the audit, and confirm REC-001 passes (the new config left staging, so ACB has an off-box copy). Keep the boot environment until the change has proven itself; ask before destroying any boot environment.
+- **Upgrades** (any version change, and always a major one): `pfSense-upgrade` on CE 2.9 does not create a boot environment itself (lesson 26). Create `pre-upgrade-<current version>` first, confirm ACB has a recent copy, then upgrade. Afterwards confirm the box boots and re-run the full audit. A boot environment does not survive a reinstall, and Netgate says versions after 26.10 upgrade by reinstall plus config restore, so for those the ACB copy (or a config backup the user downloads and stores somewhere safe) is the only rollback.
 - Prefer the pfSense GUI or its documented tools. If you must script, read `LESSONS.md` first: never name a top-level PHP variable `$g`, start Unbound custom options with `server:`, do not run `pfctl -k` over the SSH session you are using, keep the word `sshguard` out of any SSH command that restarts sshguard (lesson 25), and check 2.9 function signatures before calling them.
 - Re-run the audit afterwards to confirm the fix.
 
