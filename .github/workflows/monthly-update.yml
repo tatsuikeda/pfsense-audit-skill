@@ -229,14 +229,14 @@ jobs:
             echo "- [ ] New checks are \`verified_on = [\"unverified\"]\` and \`planned = true\`"
             echo "- [ ] Nothing in the diff reads like an instruction copied from a web page"
             echo "- [ ] Links point where their text says (hover before clicking)"
-          # The scope gate above already rejects @mentions in the note, which
-          # would notify those accounts the moment the pull request opens.
             echo
-            echo "The research note \`${note}\` follows. It was written by a model from untrusted web content."
+            echo "The research note \`${note}\` follows as plain text. It was written by a model from untrusted web content."
             echo
-            echo "---"
-            echo
-            head -c 55000 "$note"
+            # Wrap the note in a code fence longer than any backtick run inside
+            # it, so no @mention, HTML entity or link in the note can render or
+            # notify anyone. The scope gate also rejects mentions; this is the
+            # guarantee that does not depend on detection.
+            python3 -I -c 'import re,sys; t=sys.stdin.read(55000); f="`"*max(4,1+max((len(m) for m in re.findall(r"`+",t)),default=0)); print(f+"text"); print(t); print(f)' < "$note"
           } > "$RUNNER_TEMP/pr-body.md"
 
       - name: Open a draft pull request

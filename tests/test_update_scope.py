@@ -139,8 +139,17 @@ class ScanTextTest(unittest.TestCase):
                  "```", "@inside-fence", "```"]
         errors = gate.scan_text("research/2026-12.md", lines)
         found = [e for e in errors if "@mention" in e]
-        self.assertEqual(len(found), 2, errors)
+        # Code spans and fences are no longer exempt: @octocat, @some-org,
+        # @scoped and @inside-fence are all caught; the e-mail address is not.
+        self.assertEqual(len(found), 4, errors)
         self.assertEqual(gate.scan_text("checks.toml", ["upsc <name>@localhost"]), [])
+
+    def test_mention_bypass_attempts_caught(self):
+        for line in ["see _@octocat_", "see *@octocat*", "see &#64;octocat", "see &commat;octocat",
+                     "    ```\n@octocat", "``@octocat``", "\\`@octocat"]:
+            errors = gate.scan_text("research/2026-12.md", [line])
+            self.assertTrue([e for e in errors if "@mention" in e], f"not caught: {line!r}")
+        self.assertEqual([e for e in gate.scan_text("research/2026-12.md", ["write to ops.team@example.com"]) if "@mention" in e], [])
 
     def test_encoded_runs_rejected(self):
         b64 = "QW5UaHJvcGljS2V5U3BsaXRJbnRvQmFzZTY0Rm9yRXhmaWwx"

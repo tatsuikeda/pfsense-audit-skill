@@ -36,6 +36,7 @@ import argparse
 import difflib
 import ipaddress
 import os
+import html
 import re
 import subprocess
 import sys
@@ -78,7 +79,9 @@ B64_RUN_RE = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_-]{40,}={0,2}")
 HEX_RUN_RE = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64,}(?![0-9A-Fa-f])")
 # GitHub @mention of a user or team. An e-mail address (word character
 # before the @) and anything in a code span are not mentions.
-MENTION_RE = re.compile(r"(?<![\w`])@[A-Za-z0-9][A-Za-z0-9-]*")
+# Only an e-mail local part (letter, digit or dot right before "@") is exempt, so
+# emphasis markers such as _@user or *@user are still caught.
+MENTION_RE = re.compile(r"(?<![A-Za-z0-9.])@[A-Za-z0-9][A-Za-z0-9-]*")
 LESSON_HEAD_RE = re.compile(r"^### (\d+)\.")
 FEED_LESSON = "11"
 FEED_HEADING_RE = re.compile(r"^### 11\. Many classic feeds are dead or empty \([A-Z][a-z]+ \d{4}\)$")
@@ -121,15 +124,14 @@ def looks_encoded(line: str) -> bool:
 
 
 def mentions(lines: list[str]) -> list[tuple[int, str]]:
-    """(line number, mention) outside fenced code blocks and code spans."""
-    out, fenced = [], False
+    """(line number, mention) anywhere in the note, after decoding HTML entities.
+
+    Code spans and fences are not exempt: Markdown fence rules are easy to get
+    wrong, and the pull request body wraps the note in a code block anyway.
+    """
+    out = []
     for n, line in enumerate(lines, 1):
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
-        for m in MENTION_RE.finditer(re.sub(r"`[^`]*`", "", line)):
+        for m in MENTION_RE.finditer(html.unescape(line)):
             out.append((n, m.group(0)))
     return out
 
