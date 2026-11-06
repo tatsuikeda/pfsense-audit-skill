@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- `SKILL.md`: Claude Code skill that runs the audit, explains findings by priority, and only changes the firewall on explicit request.
+- Feed checks hardened: public-address checks before connecting and at every redirect, live peer check before TLS, no proxies, credentials and query strings masked in reports.
+
 - `pfaudit.py`: read-only audit, standard library only. Runs read commands over SSH, parses `config.xml` in memory, evaluates `checks.toml`, prints Markdown or JSON. Optional outside-in probes, feed tests, update check and rogue DHCP scan.
 - Catalog moved from YAML to TOML so the tool needs no third-party packages.
 

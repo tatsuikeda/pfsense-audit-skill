@@ -57,7 +57,13 @@ You get a report grouped 🔴 fix now, 🟠 fix soon, 🔵 FYI, 🟢 good, each 
 
 **How it stays read-only:** only standard FreeBSD and pfSense read commands run on the firewall (`cat`, `pfctl -si`, `sockstat`, `sysctl`, `zpool`, `drill`). Nothing is uploaded or executed there. `config.xml` is parsed in memory on your machine, never written to disk, and secret values never appear in the report.
 
-> 🧪 The Claude Code skill (`SKILL.md`) that wraps this and writes the report for you is next.
+### 🤖 As a Claude Code skill
+
+```bash
+git clone https://github.com/tatsuikeda/pfsense-audit-skill ~/.claude/skills/pfsense-audit
+```
+
+Then just ask Claude Code: *"audit the pfSense firewall at 192.168.1.1"*. The skill asks how you log in (SSH key preferred, never a pasted password), runs the same read-only audit, and walks you through the 🔴 and 🟠 findings in plain language. It never changes your firewall unless you explicitly ask for a specific fix.
 
 ## 🔍 What it checks
 
@@ -129,7 +135,7 @@ flowchart LR
 - [x] `LESSONS.md`: 23 traps, written up with symptoms and fixes
 - [x] `checks.toml`: 56 checks with versions, risk, verify and fix steps (51 confirmed on a live system)
 - [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)
-- [ ] Claude Code skill (`SKILL.md`)
+- [x] Claude Code skill (`SKILL.md`)
 - [ ] Monthly self-update workflow (branch + pull request)
 - [ ] Validation on pfSense 26.10
 - [ ] Opt-in fixes
