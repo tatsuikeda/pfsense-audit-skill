@@ -10,6 +10,7 @@ Run from the repository root:
 import argparse
 import importlib.util
 import ipaddress
+import base64
 import json
 import sys
 import tomllib
@@ -106,15 +107,15 @@ def run(cid, ctx):
 # checks.toml makes test_every_check_has_expectations fail until it is added.
 EXPECT_GOOD = {
     "ACCESS-001": "PASS", "ACCESS-002": "PASS", "ACCESS-003": "PASS", "ACCESS-004": "PASS", "ACCESS-005": "PASS",
-    "ACCESS-006": "PASS", "ACCESS-007": "PASS",
+    "ACCESS-006": "PASS", "ACCESS-007": "PASS", "ACCESS-008": "PASS",
     "PERIM-001": "PASS", "PERIM-002": "INFO", "PERIM-003": "INFO", "PERIM-004": "PASS", "PERIM-005": "PASS",
     "VPN-001": "PASS", "VPN-002": "PASS", "VPN-003": "PASS", "VPN-004": "PASS", "VPN-005": "INFO",
     "VPN-006": "INFO",  # CE 2.9 has no DCO, so INFO is the best result there
-    "VPN-007": "PASS",
+    "VPN-007": "PASS", "VPN-008": "PASS", "VPN-009": "PASS",
     "DNS-001": "PASS", "DNS-002": "PASS", "DNS-003": "PASS", "DNS-004": "INFO", "DNS-005": "PASS", "DNS-006": "PASS",
-    "DNS-007": "PASS",
+    "DNS-007": "PASS", "DNS-008": "PASS",
     "PFB-001": "PASS", "PFB-002": "PASS", "PFB-003": "PASS", "PFB-004": "PASS", "PFB-005": "PASS", "PFB-006": "PASS",
-    "PFB-007": "PASS", "PFB-008": "PASS",
+    "PFB-007": "PASS", "PFB-008": "PASS", "PFB-009": "PASS",
     "REC-001": "PASS", "REC-002": "PASS", "REC-003": "PASS", "REC-004": "PASS",
     "MON-001": "PASS", "MON-002": "PASS", "MON-003": "PASS", "MON-004": "PASS",
     "HW-001": "PASS", "HW-002": "PASS", "HW-003": "PASS", "HW-004": "PASS", "HW-005": "INFO", "HW-006": "INFO",
@@ -125,14 +126,14 @@ EXPECT_GOOD = {
 
 EXPECT_BAD = {
     "ACCESS-001": "FAIL", "ACCESS-002": "FAIL", "ACCESS-003": "FAIL", "ACCESS-004": "WARN", "ACCESS-005": "WARN",
-    "ACCESS-006": "FAIL", "ACCESS-007": "FAIL",
+    "ACCESS-006": "FAIL", "ACCESS-007": "FAIL", "ACCESS-008": "WARN",
     "PERIM-001": "FAIL", "PERIM-002": "INFO", "PERIM-003": "INFO", "PERIM-004": "INFO", "PERIM-005": "WARN",
     "VPN-001": "FAIL", "VPN-002": "FAIL", "VPN-003": "WARN", "VPN-004": "WARN", "VPN-005": "INFO", "VPN-006": "INFO",
-    "VPN-007": "FAIL",
+    "VPN-007": "FAIL", "VPN-008": "WARN", "VPN-009": "WARN",
     "DNS-001": "FAIL", "DNS-002": "WARN", "DNS-003": "WARN", "DNS-004": "INFO", "DNS-005": "FAIL", "DNS-006": "WARN",
-    "DNS-007": "FAIL",
+    "DNS-007": "FAIL", "DNS-008": "WARN",
     "PFB-001": "WARN", "PFB-002": "FAIL", "PFB-003": "WARN", "PFB-004": "WARN", "PFB-005": "WARN", "PFB-006": "INFO",
-    "PFB-007": "INFO", "PFB-008": "FAIL",
+    "PFB-007": "INFO", "PFB-008": "FAIL", "PFB-009": "FAIL",
     "REC-001": "WARN", "REC-002": "WARN", "REC-003": "INFO", "REC-004": "WARN",
     "MON-001": "WARN", "MON-002": "WARN", "MON-003": "WARN", "MON-004": "WARN",
     "HW-001": "WARN", "HW-002": "WARN", "HW-003": "WARN", "HW-004": "FAIL", "HW-005": "INFO", "HW-006": "INFO",
@@ -652,6 +653,80 @@ class FeedGuardTest(unittest.TestCase):
         for secret in ("fixture-token", "fixture-key", "user:", "disabled.txt"):
             self.assertNotIn(secret, dump)
 
+
+
+class LiveRunAdditionsTest(unittest.TestCase):
+    """Checks added after the first live run (CE 2.9.0 site firewall)."""
+
+    def test_md5_hash_user_named(self):
+        r = run("ACCESS-008", make_ctx("bad"))
+        self.assertIn("frontdesk", r.detail)
+        self.assertNotIn("FIXTURE", r.detail)
+
+    def test_vpn_dns_not_firewall_warns(self):
+        r = run("VPN-008", make_ctx(sections={"ovpn_push": "1 9.9.9.9 "}))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("9.9.9.9", r.detail)
+
+    def test_vpn_dns_tunnel_gateway_passes(self):
+        self.assertEqual(run("VPN-008", make_ctx(sections={"ovpn_push": "1 198.51.100.129 "})).status, "PASS")
+
+    def test_vpn_dns_falls_back_to_config(self):
+        ctx = make_ctx(sections={"ovpn_push": ""}, config=[set_text("openvpn/openvpn-server/dns_server1", "192.0.2.1")])
+        self.assertEqual(run("VPN-008", ctx).status, "PASS")
+
+    def test_vpn_no_dns_warns(self):
+        r = run("VPN-008", make_ctx("bad"))
+        self.assertIn("pushes no DNS", r.detail)
+
+    def test_asym_compression_is_info(self):
+        ctx = make_ctx(config=[set_text("openvpn/openvpn-server/allow_compression", "asym")])
+        self.assertEqual(run("VPN-009", ctx).status, "INFO")
+
+    def test_compression_and_net30_warn(self):
+        r = run("VPN-009", make_ctx("bad"))
+        self.assertIn("compression allowed", r.detail)
+        self.assertIn("net30", r.detail)
+
+    def test_resolver_tuning_in_custom_options_is_info(self):
+        opts = base64.b64encode(b"server:\nmsg-cache-size: 64m\nprefetch: yes\n").decode()
+        r = run("DNS-008", make_ctx(config=[set_text("unbound/custom_options", opts)]))
+        self.assertEqual(r.status, "INFO")
+        self.assertIn("64 MB", r.detail)
+        self.assertIn("lesson 27", r.detail)
+
+    def test_resolver_default_warns(self):
+        self.assertIn("4 MB, prefetch off", run("DNS-008", make_ctx("bad")).detail)
+
+    def test_resolver_byte_values(self):
+        r = run("DNS-008", make_ctx(sections={"unbound_eff": "msg-cache-size: 67108864\nprefetch: yes"}))
+        self.assertEqual(r.status, "PASS")
+        self.assertIn("64 MB", r.detail)
+
+    def test_pfb_stale_lists_warn(self):
+        r = run("PFB-009", make_ctx(sections={"pfb_age": "1 3"}))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("2 of 3", r.detail)
+
+    def test_pfb_missing_cron_fails(self):
+        self.assertEqual(run("PFB-009", make_ctx("bad")).status, "FAIL")
+
+    def test_smtp_recent_failure_warns(self):
+        r = run("MON-002", make_ctx(sections={"smtpfail": "2026 Nov 06 09:00:00\nNov  5 21:32:00"}))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("11 h ago", r.detail)
+
+    def test_smtp_old_failure_passes(self):
+        r = run("MON-002", make_ctx(sections={"smtpfail": "2026 Nov 06 09:00:00\nOct  1 10:00:00"}))
+        self.assertEqual(r.status, "PASS")
+
+    def test_smtp_failure_across_new_year(self):
+        r = run("MON-002", make_ctx(sections={"smtpfail": "2027 Jan 02 09:00:00\nDec 31 09:00:00"}))
+        self.assertIn("48 h ago", r.detail)
+
+    def test_smtp_failure_detail_has_no_addresses(self):
+        r = run("MON-002", make_ctx("bad"))
+        self.assertNotIn("@", r.detail)
 
 if __name__ == "__main__":
     unittest.main()

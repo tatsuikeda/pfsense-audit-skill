@@ -132,6 +132,9 @@
 			<crlref>crl00001</crlref>
 			<strictusercn>yes</strictusercn>
 			<certref>certvpn01</certref>
+			<allow_compression>no</allow_compression>
+			<topology>subnet</topology>
+			<tunnel_network>198.51.100.128/25</tunnel_network>
 		</openvpn-server>
 	</openvpn>
 	<crl>

@@ -12,6 +12,7 @@ unbound  unbound    4100  5   udp4   *:53                  *:*
 root     sshd       900   4   tcp4   *:22                  *:*
 @@crontab
 SHELL=/bin/sh
+0	*	*	*	*	root	/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> /var/log/pfblockerng/pfblockerng.log 2>&1
 0	*	*	*	*	root	/usr/bin/nice -n20 /usr/local/bin/php /usr/local/sbin/acbupload.php
 1,31	0-5	*	*	*	root	/usr/bin/nice -n20 adjkerntz -a
 @@acbstage
@@ -71,6 +72,18 @@ lo0: flags=1008049<UP,LOOPBACK,RUNNING,MULTICAST,LOWER_UP> metric 0 mtu 16384
 /var/etc/openvpn/server1/cert|Nov 26 12:00:00 2099 GMT
 @@pfinfo
   current entries                      123
+@@unbound_eff
+msg-cache-size: 4m
+prefetch: no
+msg-cache-size: 64m
+prefetch: yes
+@@ovpn_push
+1 192.0.2.1 
+@@pfb_age
+2 2
+@@smtpfail
+2026 Nov 06 09:00:00
+
 @@updates
 Your system is up to date
 @@dhcpscan

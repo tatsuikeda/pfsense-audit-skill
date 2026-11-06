@@ -57,6 +57,16 @@ igb1: flags=1008843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST,LOWER_UP> metric 0 mt
 /var/etc/openvpn/server1/cert|Nov 26 12:00:00 2099 GMT
 @@pfinfo
   current entries                      9
+@@unbound_eff
+msg-cache-size: 4m
+prefetch: no
+@@ovpn_push
+1 
+@@pfb_age
+0 2
+@@smtpfail
+2026 Nov 06 09:00:00
+Nov  5 21:32:00
 @@updates
 >>> Updating repositories metadata...
 2.9.1 version of pfSense is available
