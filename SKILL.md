@@ -42,6 +42,8 @@ python3 "<skill dir>/pfaudit.py" <host> [--user admin] [--identity ~/.ssh/key] [
 - Requires Python 3.11 or newer. Standard library only; do not install anything.
 - Exit code 1 means at least one check failed. That is a result, not an error.
 - If SSH fails, report the error and stop. Do not retry with other credentials or disable host key checking.
+- **Host key changed?** Stop. Show the user the old and new fingerprints and ask them to confirm the new one at the console (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`). Only after they confirm, remove the stale `known_hosts` entry and add the scanned key whose fingerprint matches. Do not loop on connection attempts or key scans: every connection refused before login counts toward sshguard's block (`LESSONS.md` lesson 24).
+- **SSH times out but ping works?** sshguard has probably blocked this machine on the SSH and GUI ports. Tell the user, and either wait a few minutes or ask them to clear it from an open session (`pfctl -t sshguard -T delete <address>`). Offer, as an opt-in change, to add this machine's own address as a `/32` to the Login Protection pass list. Suggest a whole VPN subnet only when the audit shows VPN clients are blocked from firewall management (ACCESS-007 passes).
 
 ## Present the results
 
@@ -59,7 +61,7 @@ Never paste `config.xml`, password hashes, keys, API keys or certificates into t
 The audit never changes anything. Only make changes when the user explicitly asks, one finding at a time, and say what will restart first. Before changing a firewall:
 
 - Take a config backup and, on ZFS, a boot environment (`bectl create`).
-- Prefer the pfSense GUI or its documented tools. If you must script, read `LESSONS.md` first: never name a top-level PHP variable `$g`, start Unbound custom options with `server:`, do not run `pfctl -k` over the SSH session you are using, and check 2.9 function signatures before calling them.
+- Prefer the pfSense GUI or its documented tools. If you must script, read `LESSONS.md` first: never name a top-level PHP variable `$g`, start Unbound custom options with `server:`, do not run `pfctl -k` over the SSH session you are using, keep the word `sshguard` out of any SSH command that restarts sshguard (lesson 25), and check 2.9 function signatures before calling them.
 - Re-run the audit afterwards to confirm the fix.
 
 ## References in this directory

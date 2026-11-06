@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- First live run against a CE 2.9.0 site firewall. `LESSONS.md` lessons 24 and 25: sshguard locks out the auditor after host key mismatches (block covers only the SSH and GUI ports), and restarting sshguard kills SSH commands that mention it. `SKILL.md` now covers a changed host key, the sshguard timeout, and an opt-in `/32` pass list entry.
+
 - Monthly self-update now runs from the maintainer's Claude Code session (runbook in docs/SELF-UPDATE.md). No API key in GitHub Actions; the Update gate workflow re-checks every auto-update pull request using the gate from main.
 
 - Review fixes: the UniFi collector keeps devices and the other part when one networks or Wi-Fi call fails, and only a CAPTIVE_PORTAL hotspot counts as a guest SSID (Passpoint does not). The self-update gate now allows existing checks only to gain notes, existing lessons only to change the lesson 11 feed table, and rejects @mentions and long encoded strings in the research note. The research job can no longer read outside the checkout, and shared hosting hosts left its fetch allow-list. README and `SKILL.md` no longer claim Plus or 26.10 support before validation, and examples use documentation addresses.
