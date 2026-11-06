@@ -144,3 +144,14 @@ The monthly self-update re-tests feeds and updates this table.
 
 ### 23. Killing all states kills your own SSH session
 `pfctl -k 0.0.0.0/0` from a script over SSH cuts off the session running it.
+
+### 24. sshguard locks out the auditor after a host key mismatch
+- **You see:** SSH worked a minute ago, now it times out. Ping still answers, and so does port 80.
+- **Really:** each refused connection (a changed host key, a key scan, a retry loop) closes before login, and sshguard counts that as an attack. Its pf rules then drop your address, but only on the SSH port and the web GUI port, so the box looks half alive. Sessions that were already open keep working.
+- **Detect:** from an open session, `pfctl -t sshguard -T show` lists your address.
+- **Fix:** wait a few minutes for the block to expire, or run `pfctl -t sshguard -T delete <address>`. To stop it recurring, add your own management address (as a `/32`) under System > Advanced > Admin Access > Login Protection. Only pass a whole VPN subnet when firewall rules already keep VPN clients away from the GUI and SSH; otherwise you have removed brute force protection for every VPN user.
+- **Seen on:** CE 2.9.0
+
+### 25. Restarting sshguard kills any SSH command that mentions it
+`system_sshguard_stop()` runs `pkill -f` with a pattern that matches `sshguard` anywhere in a command line. If the script you send over SSH contains that word (a `grep sshguard`, a comment, a file name), the restart kills your own shell and the session drops with exit code 255 partway through. The config change itself completes. Run the restart from a script file whose path and contents avoid the word in the command line, or reconnect and verify afterwards.
+- **Seen on:** CE 2.9.0
