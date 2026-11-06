@@ -52,6 +52,8 @@ Prefer no AI? The checks will also run as a plain shell script that prints JSON 
 
 ## 🔍 What it checks
 
+**56 checks** across 10 areas, cataloged in [`checks.yaml`](checks.yaml). Each one lists the versions it was confirmed on, so you know which results to trust.
+
 | Area | Highlights |
 |---|---|
 | 🔐 **Access & exposure** | GUI and SSH exposure, key-only SSH, admin account hygiene, what is reachable from the WAN (tested from outside), what VPN users can reach |
@@ -67,7 +69,7 @@ Prefer no AI? The checks will also run as a plain shell script that prints JSON 
 
 ## 🧠 Lessons from the field
 
-Every check traces back to something real. A taste of what is coming in `LESSONS.md`:
+Every check traces back to something real. A taste of [`LESSONS.md`](LESSONS.md):
 
 | Trap | What you see | What is actually happening |
 |---|---|---|
@@ -115,8 +117,8 @@ flowchart LR
 
 ## 🗺️ Roadmap
 
-- [ ] `LESSONS.md`: the traps, written up with symptoms and fixes
-- [ ] `checks.yaml`: every check with versions, risk, verify and fix steps
+- [x] `LESSONS.md`: 23 traps, written up with symptoms and fixes
+- [x] `checks.yaml`: 56 checks with versions, risk, verify and fix steps (51 confirmed on a live system)
 - [ ] Read-only audit script (JSON and Markdown output)
 - [ ] Claude Code skill (`SKILL.md`)
 - [ ] Monthly self-update workflow (branch + pull request)
