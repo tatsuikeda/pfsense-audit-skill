@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- Correction to lesson 26: `pfSense-upgrade` does call `bectl`, but its clone-and-upgrade boot environment path runs only on Plus, so CE still upgrades in place. Added that its `be_prune` step destroys all boot environments on layouts that fail its check; `SKILL.md` now checks the layout before relying on a pre-upgrade boot environment.
+
 - Five new checks from a real site build log, each confirmed on a live CE 2.9.0 box: ACCESS-008 (legacy MD5 password hashes), VPN-008 (VPN clients use the firewall for DNS), VPN-009 (no compression or net30), DNS-008 (resolver cache and prefetch, and tuning hidden in custom options), PFB-009 (lists actually refreshing). MON-002 now reads the system log for recent send failures instead of only checking that SMTP is configured. Lessons 27 to 29. 61 checks.
 
 - Fixes from the first live run: ACCESS-007 reports INFO and names any source passed to any before the management block (was a silent PASS); REC-001 warns when a staged backup is over 15 minutes old even though the upload job exists; HW-005 explains frequency scaling and idle states instead of raw sysctl output; VPN-004, DNS-006 and MON-004 gained fix and impact text. `--feeds` and `--updates` confirmed on a live CE 2.9.0 box. `SKILL.md` sets a before and after routine for changes and upgrades (boot environment first, ACB copy confirmed after); lesson 26: upgrades do not create a boot environment.

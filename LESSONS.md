@@ -156,9 +156,12 @@ The monthly self-update re-tests feeds and updates this table.
 `system_sshguard_stop()` runs `pkill -f` with a pattern that matches `sshguard` anywhere in a command line. If the script you send over SSH contains that word (a `grep sshguard`, a comment, a file name), the restart kills your own shell and the session drops with exit code 255 partway through. The config change itself completes. Run the restart from a script file whose path and contents avoid the word in the command line, or reconnect and verify afterwards.
 - **Seen on:** CE 2.9.0
 
-### 26. Upgrading does not snapshot itself
-`pfSense-upgrade` on CE 2.9 never calls `bectl`, so an update leaves no boot environment to roll back to unless you made one first. Run `bectl create pre-upgrade-<version>` before System > Update, and check `bectl list` shows it. Boot environments live on the same pool, so they do not help if a later version is installed fresh; keep an off-box config backup as well.
-- **Seen on:** CE 2.9.0
+### 26. Upgrading on CE does not snapshot itself
+- **Really:** `/usr/local/libexec/pfSense-upgrade` has a boot environment upgrade path (rename the current one to `<name>_<timestamp>`, clone it, upgrade the clone), but it only runs when `is_plus` is true. CE takes the old in-place path, so an update leaves nothing to roll back to unless you made a boot environment first.
+- **Worse on some layouts:** before either path, the script calls `be_prune`, which destroys **every** boot environment when its own check fails. That check needs root on ZFS, `bectl check` to pass, and both `/cf` and `/var/db/pkg` on datasets under the root boot environment. On a box that fails it, a boot environment you made for the upgrade is deleted by the upgrade.
+- **Detect:** `bectl check` succeeds and `df -T /cf /var/db/pkg` shows datasets under the same `.../ROOT/<name>` as `/`.
+- **Fix:** on CE, run `bectl create pre-upgrade-<version>` before System > Update and check `bectl list` shows it. If the layout check fails, do not count on that boot environment: confirm an off-box config backup (ACB or a download kept somewhere safe) first. Boot environments also do not survive a fresh install.
+- **Seen on:** CE 2.9.0 (pfSense-upgrade 1.3.40). The CE and Plus split was read from the script on a live box; the prune on a failing layout is from the source and has not been reproduced here.
 
 ### 27. Resolver tuning in custom options hides from the GUI
 - **You see:** DNS Resolver > Advanced Settings shows a 4 MB message cache with prefetch off.

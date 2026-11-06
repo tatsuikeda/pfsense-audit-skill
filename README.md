@@ -91,7 +91,7 @@ What the skill handles for you:
 
 - **A changed host key stops the run.** It shows you the old and new fingerprints and waits until you have confirmed the new one at the console. It never skips host key checking.
 - **sshguard lockouts.** If SSH times out while ping still answers, it explains that sshguard has blocked your address on the SSH and GUI ports, and how to clear it or wait it out. It can add your own address (a `/32`) to the Login Protection pass list, but only if you ask.
-- **A safety net around every change.** Before a fix or an upgrade it creates a boot environment (`bectl create pre-<change>-<date>`), because `pfSense-upgrade` does not make one itself. After the change it re-runs the audit and confirms AutoConfigBackup has an off-box copy of the new config. It never copies `config.xml` to your machine.
+- **A safety net around every change.** Before a fix or an upgrade it creates a boot environment (`bectl create pre-<change>-<date>`), because on CE `pfSense-upgrade` upgrades in place without one (its boot environment path is Plus only). After the change it re-runs the audit and confirms AutoConfigBackup has an off-box copy of the new config. It never copies `config.xml` to your machine.
 
 ## 🔍 What it checks
 
@@ -123,7 +123,7 @@ Every check traces back to something real. A taste of [`LESSONS.md`](LESSONS.md)
 | Gateway monitor default | Always green | It pings the modem, not the internet |
 | Plain DNS to a filter | Filter "not working" | The ISP gateway answers port 53 itself |
 | Host key mismatch | SSH times out, ping still works | sshguard blocked you on the SSH and GUI ports after the refused connections |
-| Upgrading in place | Update finished fine | No boot environment was made, so there is nothing to roll back to |
+| Upgrading CE in place | Update finished fine | The automatic boot environment is Plus only, so there is nothing to roll back to |
 | Alert email | Configured, test passed on day one | The app password was revoked; every alert since has failed, logged once each |
 | VPN and DNS filtering | Filtering works on the LAN | VPN clients keep their own DNS unless the server pushes the firewall |
 
