@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 [![pfSense CE 2.9](https://img.shields.io/badge/pfSense%20CE-2.9.0-212121?logo=pfsense&logoColor=white)](#-version-support)
-[![pfSense 26.10](https://img.shields.io/badge/pfSense-26.10%20ready%20(validation%20on%20release)-0b6bcb)](#-version-support)
+[![pfSense 26.10](https://img.shields.io/badge/pfSense%2026.10-ready%2C%20validating%20on%20release-0b6bcb)](#-version-support)
 [![Read only](https://img.shields.io/badge/mode-read%20only-success)](#-safety-first)
 [![Self-updating](https://img.shields.io/badge/knowledge-updates%20monthly-8a2be2)](#-it-keeps-itself-current)
 [![Claude Code skill](https://img.shields.io/badge/Claude%20Code-skill-d97757)](#-quick-start)
