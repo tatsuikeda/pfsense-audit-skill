@@ -36,23 +36,32 @@ This skill audits for the textbook items **and** for the traps we have actually 
 
 ## 🚀 Quick start
 
-> 🧪 The audit script and skill land in the first tagged release. The flow will look like this:
+**Plain Python, no installs.** Python 3.11 or newer, standard library only.
 
 ```bash
-# 1. Install the skill into Claude Code
-git clone https://github.com/tatsuikeda/pfsense-audit-skill ~/.claude/skills/pfsense-audit
-
-# 2. In Claude Code, ask for an audit
-#    "audit the pfSense firewall at 192.168.1.1"
+git clone https://github.com/tatsuikeda/pfsense-audit-skill
+cd pfsense-audit-skill
+python3 pfaudit.py 192.168.1.1                       # SSH key auth as admin
+python3 pfaudit.py 192.168.1.1 --external --feeds    # add outside-in probes and feed health
 ```
 
-Claude connects over SSH, runs the read-only checks on the firewall, and writes a report: 🔴 fix now, 🟠 fix soon, 🟢 good, each with *why it matters* and *how to fix it*.
+| Flag | What it adds |
+|---|---|
+| `--external` | Probes your WAN from this machine (run it from outside the network) |
+| `--feeds` | Tests every pfBlockerNG feed URL for dead or empty lists |
+| `--updates` | Asks the firewall to check for pfSense updates |
+| `--dhcp-scan` | Listens 45 seconds on the LAN for rogue DHCP servers |
+| `--json` | Machine-readable output |
 
-Prefer no AI? The checks will also run as a plain shell script that prints JSON and Markdown.
+You get a report grouped 🔴 fix now, 🟠 fix soon, 🔵 FYI, 🟢 good, each with *why it matters* and *how to fix it*. The exit code is non-zero when anything fails, so it slots into scheduled checks.
+
+**How it stays read-only:** only standard FreeBSD and pfSense read commands run on the firewall (`cat`, `pfctl -si`, `sockstat`, `sysctl`, `zpool`, `drill`). Nothing is uploaded or executed there. `config.xml` is parsed in memory on your machine, never written to disk, and secret values never appear in the report.
+
+> 🧪 The Claude Code skill (`SKILL.md`) that wraps this and writes the report for you is next.
 
 ## 🔍 What it checks
 
-**56 checks** across 10 areas, cataloged in [`checks.yaml`](checks.yaml). Each one lists the versions it was confirmed on, so you know which results to trust.
+**56 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
 
 | Area | Highlights |
 |---|---|
@@ -118,8 +127,8 @@ flowchart LR
 ## 🗺️ Roadmap
 
 - [x] `LESSONS.md`: 23 traps, written up with symptoms and fixes
-- [x] `checks.yaml`: 56 checks with versions, risk, verify and fix steps (51 confirmed on a live system)
-- [ ] Read-only audit script (JSON and Markdown output)
+- [x] `checks.toml`: 56 checks with versions, risk, verify and fix steps (51 confirmed on a live system)
+- [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)
 - [ ] Claude Code skill (`SKILL.md`)
 - [ ] Monthly self-update workflow (branch + pull request)
 - [ ] Validation on pfSense 26.10
