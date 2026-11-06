@@ -134,24 +134,18 @@ flowchart LR
 
 - **Sources it watches:** Netgate release notes and security advisories, the pfSense bug tracker, Netgate forum, r/PFSENSE, and pfBlockerNG feed health.
 - **Every change cites its sources** in the pull request, so you can check the evidence.
-- **A human merges.** The bot reads the open internet, and anyone can post there. Changes land as pull requests so nothing reaches `main`, or your firewall, without review.
+- **A human merges.** The research reads the open internet, and anyone can post there. Changes land as pull requests so nothing reaches `main`, or your firewall, without review.
 
-**Turn it on in your fork** ([`.github/workflows/monthly-update.yml`](.github/workflows/monthly-update.yml)):
+**How it runs:** the maintainer's own Claude Code session does the monthly research by following [`docs/SELF-UPDATE.md`](docs/SELF-UPDATE.md), commits to an `auto-update/YYYY-MM` branch and opens a draft pull request. There is no API key in GitHub Actions.
 
-1. 🔑 Add a repository secret named **`ANTHROPIC_API_KEY`** (Settings > Secrets and variables > Actions). Only the research job can read it.
-2. ⚙️ In Settings > Actions > General, turn on **Allow GitHub Actions to create and approve pull requests**.
-3. 🔒 Protect `main`: require a pull request, one approval and the **CI** checks.
-
-**What happens each month** (06:17 UTC on the 1st, or any time from the Actions tab with *Run workflow*):
-
-| Step | Who | Guard rail |
+| Step | Where | Guard rail |
 |---|---|---|
-| 🔎 Research | Claude, via the official Claude Code GitHub Action, following [`.github/self-update-prompt.md`](.github/self-update-prompt.md) | No shell, a read-only token, web fetches limited to an allow-list, edits limited to `checks.toml`, `LESSONS.md`, `CHANGELOG.md` and `research/` |
-| 🚧 Gate | A separate job with no API key | Fails on any other path, deleted history, a new check not marked `unverified`, dashes, real IPs or MACs, or anything that looks like a key |
-| ✅ Validate | Same job | `checks.toml` parses, every check is implemented or marked `planned`, unit tests pass |
-| 📬 Propose | Same job | A **draft** pull request on `auto-update/YYYY-MM`, with the month's research note and its sources as the description |
+| 🔎 Research and edit | Maintainer's Claude Code session | Only `checks.toml`, `LESSONS.md`, `CHANGELOG.md` and `research/` may change; web content is treated as untrusted data |
+| 🚧 Gate | Locally, then again in the **Update gate** workflow | Uses the gate from `main`; fails on any other path, deleted history, edits to human-verified checks, a new check not marked `unverified`, dashes, real IPs or MACs, credentials or @mentions |
+| ✅ Validate | **CI** workflow | `checks.toml` parses, every check is implemented or marked `planned`, unit tests pass on Python 3.11 and 3.13 |
+| 📬 Propose | Draft pull request | The research note is shown inside a code block, so nothing in it can render as a mention or link |
 
-**Reviewing it:** read `research/YYYY-MM.md` first, open the sources, then mark the draft *Ready for review* (or approve the waiting CI run) to start CI. Merge what holds up, close the rest. New checks stay `unverified` until someone confirms them on a live box.
+**Reviewing it:** read `research/YYYY-MM.md` first, open the sources, then merge or close.
 
 ## 🛡️ Safety first
 

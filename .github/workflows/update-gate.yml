@@ -1,0 +1,46 @@
+# Re-runs the self-update scope gate on every auto-update/* pull request.
+# The gate script is taken from the base commit, so a pull request cannot
+# loosen its own gate. Read-only: no secrets, no write token.
+name: Update gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    if: startsWith(github.head_ref, 'auto-update/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the pull request with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Run the gate from the base commit against the pull request's changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          month="${HEAD_REF#auto-update/}"
+          case "$month" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]) ;;
+            *) echo "Branch must be auto-update/YYYY-MM, got $HEAD_REF"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/gate"
+          git show "$BASE_SHA:.github/scripts/check_update_scope.py" > "$RUNNER_TEMP/gate/check_update_scope.py"
+          # Move HEAD to the base commit and keep the pull request's files, so
+          # its changes appear as uncommitted edits, which is what the gate checks.
+          git reset --mixed "$BASE_SHA"
+          python -I "$RUNNER_TEMP/gate/check_update_scope.py" --month "$month" --root "$GITHUB_WORKSPACE"
