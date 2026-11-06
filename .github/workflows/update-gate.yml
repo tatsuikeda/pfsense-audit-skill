@@ -28,6 +28,31 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Check changed paths from git objects (immune to .gitignore tricks)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Compare commits directly, so ignore rules in the pull request cannot
+          # hide a file from this check. Only additions and edits to the allowed
+          # paths pass; any .gitignore or .gitattributes change fails.
+          git diff --name-status --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          cat "$RUNNER_TEMP/changed.txt"
+          python -I - "$RUNNER_TEMP/changed.txt" <<'PY'
+          import re, sys
+          ok = re.compile(r"^(checks\.toml|LESSONS\.md|CHANGELOG\.md|research/[A-Za-z0-9._-]+\.md)$")
+          bad = []
+          for line in open(sys.argv[1]):
+              status, _, path = line.rstrip("\n").partition("\t")
+              name = path.rsplit("/", 1)[-1]
+              if name in (".gitignore", ".gitattributes") or status not in ("A", "M") or not ok.match(path):
+                  bad.append(f"{status} {path}")
+          if bad:
+              print("Not allowed in an auto-update pull request:", *bad, sep="\n  ")
+              sys.exit(1)
+          print("Changed paths are all within the allow-list.")
+          PY
+
       - name: Run the gate from the base commit against the pull request's changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
