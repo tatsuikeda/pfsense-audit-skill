@@ -740,8 +740,11 @@ class _PublicHTTPConnection(http.client.HTTPConnection):
 
 class _PublicHTTPSConnection(http.client.HTTPSConnection):
     def connect(self):
-        super().connect()  # TCP connect plus TLS handshake
+        # Plain TCP first, check the peer, and only then start TLS, so nothing
+        # (not even a TLS hello) reaches a non-public address.
+        http.client.HTTPConnection.connect(self)
         _require_public_peer(self.sock)
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
 
 
 class _PublicHTTPHandler(urllib.request.HTTPHandler):
