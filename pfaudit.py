@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import re
@@ -723,6 +724,36 @@ def safe_url(url: str) -> str:
     return urlunsplit((p.scheme, host, p.path, "", "")) + ("?..." if p.query else "")
 
 
+def _require_public_peer(sock) -> None:
+    import ipaddress
+    peer = ipaddress.ip_address(sock.getpeername()[0])
+    if not peer.is_global or peer.is_multicast:
+        sock.close()
+        raise urllib.error.URLError(f"connected to non-public address {peer}; blocked")
+
+
+class _PublicHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        super().connect()
+        _require_public_peer(self.sock)
+
+
+class _PublicHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()  # TCP connect plus TLS handshake
+        _require_public_peer(self.sock)
+
+
+class _PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PublicHTTPConnection, req)
+
+
+class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PublicHTTPSConnection, req, context=self._context)
+
+
 class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not public_url(newurl):
@@ -736,7 +767,9 @@ def feed_tests(ctx: Ctx) -> list:
         for row in ctx.all(f"installedpackages/{sec}/config/row"):
             if (row.findtext("state") or "Enabled") == "Enabled" and (row.findtext("url") or "").startswith("http"):
                 urls.add(row.findtext("url"))
-    opener = urllib.request.build_opener(_CheckedRedirect)
+    # No environment proxies, a pre-check on every hop, and a check of the live
+    # socket's peer address, so DNS rebinding cannot reach internal hosts.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _PublicHTTPHandler, _PublicHTTPSHandler, _CheckedRedirect)
     out = []
     for u in sorted(urls):
         why = ""
