@@ -95,18 +95,18 @@ What the skill handles for you:
 
 ## 🔍 What it checks
 
-**56 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
+**61 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
 
 | Area | Highlights |
 |---|---|
-| 🔐 **Access & exposure** | GUI and SSH exposure, key-only SSH, admin account hygiene, what is reachable from the WAN (tested from outside), what VPN users can reach |
-| 🌐 **DNS** | Resolver vs forwarding, DNS over TLS, DNSSEC interplay with filtering resolvers, client DNS bypass (53, 853, DoH), ISP DNS interception |
-| 🚫 **pfBlockerNG** | Dead and stale feeds, wildcard (TLD) coverage, CNAME validation, Kill States, Python Control, false positives in real traffic |
-| 🔑 **VPN** | Ciphers, TLS-crypt, CRL presence, cert lifetimes and auto-renew, OpenVPN DCO state, MFA for VPN logins 🔬 |
+| 🔐 **Access & exposure** | GUI and SSH exposure, key-only SSH, admin account hygiene, what is reachable from the WAN (tested from outside), what VPN users can reach, legacy (MD5) password hashes on local users |
+| 🌐 **DNS** | Resolver vs forwarding, DNS over TLS, DNSSEC interplay with filtering resolvers, client DNS bypass (53, 853, DoH), ISP DNS interception, resolver cache and prefetch tuning (and tuning hidden in custom options) |
+| 🚫 **pfBlockerNG** | Dead and stale feeds, wildcard (TLD) coverage, CNAME validation, Kill States, Python Control, false positives in real traffic, lists actually refreshing (update job present, files fresh) |
+| 🔑 **VPN** | Ciphers, TLS-crypt, CRL presence, cert lifetimes and auto-renew, OpenVPN DCO state, clients told to use the firewall for DNS so filtering applies, no compression (VORACLE) or net30 topology, MFA for VPN logins 🔬 |
 | ⚡ **Performance** | AES-NI and hardware crypto, NIC offloading (TSO, LRO), CPU frequency scaling (SpeedStep, Speed Shift) 🔬 |
 | 🌡️ **Hardware health** | Thermal sensors, disk SMART, ZFS pool health, boot environments, auto power-on after outage (manual check) 🔬 |
 | 🔋 **Power** | NUT status, UPS alerts, shutdown thresholds |
-| 📣 **Monitoring & alerts** | Gateway monitor target, SMTP alerts, certificate expiry alerts, remote syslog |
+| 📣 **Monitoring & alerts** | Gateway monitor target, SMTP alerts, certificate expiry alerts, remote syslog, alert email that is failing to send (read from the system log) |
 | 💾 **Recovery** | AutoConfigBackup actually uploading (upload job present, nothing stuck in staging), local backups, System Patches |
 | 📡 **UniFi behind pfSense** | DHCP Guarding and Snooping, guest SSIDs and restricted subnets without a UniFi gateway, controller inform host, auto-upgrade (read-only via `--unifi`; DHCP Guarding, guest SSID and inform host checks not yet run on a live console 🔬) |
 
@@ -124,6 +124,8 @@ Every check traces back to something real. A taste of [`LESSONS.md`](LESSONS.md)
 | Plain DNS to a filter | Filter "not working" | The ISP gateway answers port 53 itself |
 | Host key mismatch | SSH times out, ping still works | sshguard blocked you on the SSH and GUI ports after the refused connections |
 | Upgrading in place | Update finished fine | No boot environment was made, so there is nothing to roll back to |
+| Alert email | Configured, test passed on day one | The app password was revoked; every alert since has failed, logged once each |
+| VPN and DNS filtering | Filtering works on the LAN | VPN clients keep their own DNS unless the server pushes the firewall |
 
 ## 🔄 It keeps itself current
 
@@ -175,8 +177,8 @@ flowchart LR
 
 ## 🗺️ Roadmap
 
-- [x] `LESSONS.md`: 26 traps, written up with symptoms and fixes
-- [x] `checks.toml`: 56 checks with versions, risk, verify and fix steps (50 with a confirmed version, 5 unverified, 1 manual)
+- [x] `LESSONS.md`: 29 traps, written up with symptoms and fixes
+- [x] `checks.toml`: 61 checks with versions, risk, verify and fix steps (55 with a confirmed version, 5 unverified, 1 manual)
 - [x] Read-only UniFi controller checks (`--unifi`)
 - [ ] UniFi checks run against a live console (lab test of API key access to the legacy API)
 - [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)

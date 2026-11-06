@@ -26,6 +26,7 @@
 		<user>
 			<name>frontdesk</name>
 			<uid>2000</uid>
+			<md5-hash>FIXTURE-NOT-A-REAL-HASH-2</md5-hash>
 		</user>
 		<group>
 			<name>admins</name>
@@ -84,6 +85,8 @@
 			<data_ciphers_fallback>AES-256-CBC</data_ciphers_fallback>
 			<dh_length>1024</dh_length>
 			<certref>certvpn01</certref>
+			<allow_compression>yes</allow_compression>
+			<topology>net30</topology>
 		</openvpn-server>
 		<openvpn-server>
 			<vpnid>2</vpnid>

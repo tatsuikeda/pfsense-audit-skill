@@ -88,6 +88,17 @@ impact = "filter reload"
 verified_on = ["ce-2.9.0"]
 
 [[checks]]
+id = "ACCESS-008"
+category = "access"
+title = "Local users have modern password hashes"
+risk = "medium"
+verify = { config = "system/user without md5-hash or password (legacy crypt); bcrypt-hash or sha512-hash expected" }
+fix = "System > User Manager: set a new password for each listed user (stored as bcrypt), then hand out the new VPN password"
+impact = "the user must log in with the new password; VPN profiles are unchanged"
+verified_on = ["ce-2.9.0"]
+notes = "auth.inc on 2.9.0 still accepts md5-hash (unsalted md5) at login. Seen on a predecessor box whose VPN users carried md5-hash."
+
+[[checks]]
 id = "PERIM-001"
 category = "perimeter"
 title = "WAN blocks private and bogon networks"
@@ -202,6 +213,27 @@ verified_on = ["ce-2.9.0"]
 notes = "Auto-renew runs daily, renews at one third of lifetime, keeps the key, caps to 398 days, restarts the service."
 
 [[checks]]
+id = "VPN-008"
+category = "vpn"
+title = "VPN clients use the firewall for DNS"
+risk = "medium"
+verify = { command = "dhcp-option DNS lines in /var/etc/openvpn/server*/config.ovpn; config dns_server1-4 as fallback; must be a firewall interface address or the tunnel gateway" }
+fix = "VPN > OpenVPN > Servers > DNS Server 1: the firewall's LAN address, so DNSBL and filtered forwarding apply over the tunnel"
+impact = "restarts OpenVPN, drops tunnels; clients pick it up on reconnect"
+verified_on = ["ce-2.9.0"]
+
+[[checks]]
+id = "VPN-009"
+category = "vpn"
+title = "No legacy OpenVPN options"
+risk = "medium"
+verify = { config = "openvpn/openvpn-server/*/allow_compression is no (asym is INFO, yes is WARN); topology not net30" }
+fix = "Allow Compression: Refuse any non-stub compression; Topology: Subnet. Re-export client profiles"
+impact = "restarts OpenVPN, drops tunnels; changing topology needs new client profiles"
+verified_on = ["ce-2.9.0"]
+notes = "Values from openvpn.inc on 2.9.0: no, asym, yes."
+
+[[checks]]
 id = "DNS-001"
 category = "dns"
 title = "Plain DNS is not intercepted upstream"
@@ -264,6 +296,17 @@ title = "Unbound is running and resolving"
 risk = "high"
 verify = { command = "pgrep -x unbound; drill example.com @127.0.0.1 NOERROR" }
 verified_on = ["ce-2.9.0"]
+
+[[checks]]
+id = "DNS-008"
+category = "dns"
+title = "Resolver cache and prefetch tuned, in the GUI"
+risk = "low"
+verify = { command = "effective msg-cache-size and prefetch in /var/unbound/unbound.conf (last value wins); custom options checked for overrides" }
+fix = "Services > DNS Resolver > Advanced Settings: Message Cache Size 50 MB or more, Prefetch Support and Prefetch DNS Key Support on; remove the same lines from custom options"
+impact = "restarts Unbound (a few seconds without DNS)"
+verified_on = ["ce-2.9.0"]
+notes = "GUI default is 4 MB with prefetch off. The 10 MB WARN threshold is a judgement for a busy small office, not a Netgate rule."
 
 [[checks]]
 id = "PFB-001"
@@ -334,6 +377,16 @@ verify = { command = "a known listed domain resolves to the DNSBL VIP; a subdoma
 verified_on = ["ce-2.9.0"]
 
 [[checks]]
+id = "PFB-009"
+category = "pfblockerng"
+title = "Lists are actually refreshing"
+risk = "medium"
+verify = { command = "pfblockerng.php cron in /etc/crontab; list files under /var/db/pfblockerng/dnsbl and deny modified within 48 h" }
+fix = "Firewall > pfBlockerNG > Update: run Force Update and read the log; if the cron line is missing, save the pfBlockerNG General page"
+impact = "a forced update reloads Unbound and the firewall rules"
+verified_on = ["ce-2.9.0"]
+
+[[checks]]
 id = "REC-001"
 category = "recovery"
 title = "AutoConfigBackup is uploading"
@@ -380,7 +433,9 @@ id = "MON-002"
 category = "monitoring"
 title = "Email notifications configured and working"
 risk = "medium"
-verify = { config = "notifications/smtp/ipaddress and notifyemailaddress set" }
+verify = { config = "notifications/smtp/ipaddress and notifyemailaddress set", command = "last 'Could not send the message' in /var/log/system.log within 7 days is a WARN" }
+fix = "System > Advanced > Notifications: fix the credentials (a revoked Gmail app password is the usual cause), then Test SMTP Settings"
+impact = "none"
 verified_on = ["ce-2.9.0"]
 
 [[checks]]

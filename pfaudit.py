@@ -59,6 +59,10 @@ s ups; for u in $(upsc -l 2>/dev/null); do echo "$u $(upsc $u@localhost ups.stat
 s ifconfig; ifconfig -a 2>/dev/null | grep -E '^[a-z]|options='
 s certs; for f in /var/etc/cert.crt /var/etc/openvpn/server*/cert; do [ -f "$f" ] && echo "$f|$(openssl x509 -noout -enddate -in $f 2>/dev/null | cut -d= -f2)"; done
 s pfinfo; pfctl -si 2>/dev/null | grep -E 'current entries'
+s unbound_eff; grep -E '^[[:space:]]*(msg-cache-size|rrset-cache-size|prefetch|prefetch-key):' /var/unbound/unbound.conf 2>/dev/null
+s ovpn_push; for f in /var/etc/openvpn/server*/config.ovpn; do [ -f "$f" ] || continue; n=${f%/config.ovpn}; n=${n##*server}; echo "$n $(grep 'dhcp-option DNS' "$f" | awk '{print $NF}' | tr -d '"' | tr '\n' ' ')"; done
+s pfb_age; echo "$(find /var/db/pfblockerng/dnsbl /var/db/pfblockerng/deny -name '*.txt' -mtime -2 2>/dev/null | wc -l) $(find /var/db/pfblockerng/dnsbl /var/db/pfblockerng/deny -name '*.txt' 2>/dev/null | wc -l)"
+s smtpfail; date '+%Y %b %d %H:%M:%S'; grep 'Could not send the message' /var/log/system.log 2>/dev/null | tail -1 | awk '{print $1, $2, $3}'
 """
 
 UPDATES_SCRIPT = 's() { echo "@@$1"; }\ns updates; timeout 120 pfSense-upgrade -c 2>&1 | tail -3\n'
@@ -599,7 +603,159 @@ def _(ctx):
 @check("MON-002")
 def _(ctx):
     ok = ctx.get("notifications/smtp/ipaddress") and ctx.get("notifications/smtp/notifyemailaddress")
-    return Result("PASS", "SMTP notifications configured") if ok else Result("WARN", "No email notifications configured")
+    if not ok:
+        return Result("WARN", "No email notifications configured")
+    lines = ctx.sec("smtpfail").splitlines()
+    if len(lines) < 2 or not lines[1].strip():
+        return Result("PASS", "SMTP notifications configured, no send failures in the current system log")
+    try:
+        now = datetime.strptime(lines[0].strip(), "%Y %b %d %H:%M:%S")
+        last = datetime.strptime(f"{now.year} {' '.join(lines[1].split())}", "%Y %b %d %H:%M:%S")
+        if last > now:  # syslog has no year: a December entry read in January
+            last = last.replace(year=now.year - 1)
+    except ValueError:
+        return Result("WARN", "SMTP configured, but the system log shows a send failure (date unreadable); send a test to confirm (lesson 28)")
+    hours = (now - last).total_seconds() / 3600
+    if hours <= 24 * 7:
+        return Result("WARN", f"Alert email failed to send {hours:.0f} h ago ({last:%b %d %H:%M}); if fixed since, send a test to confirm (lesson 28)")
+    return Result("PASS", "SMTP notifications configured, no send failures in the last 7 days")
+
+
+@check("ACCESS-008")
+def _(ctx):
+    legacy = [u.findtext("name") or "?" for u in ctx.all("system/user")
+              if u.find("disabled") is None and ((u.findtext("md5-hash") or "").strip() or (u.findtext("password") or "").strip())]
+    if legacy:
+        return Result("WARN", f"Legacy password hashes (unsalted MD5 or old crypt) on: {', '.join(legacy)}; reset these passwords")
+    return Result("PASS", "All enabled local users use bcrypt or SHA-512 hashes")
+
+
+def _firewall_addrs(ctx):
+    out = set()
+    for el in ctx.root.findall("interfaces/*/ipaddr"):
+        try:
+            out.add(ipaddress.ip_address((el.text or "").strip()))
+        except ValueError:
+            pass
+    for v in ctx.root.findall("virtualip/vip/subnet"):
+        try:
+            out.add(ipaddress.ip_address((v.text or "").strip()))
+        except ValueError:
+            pass
+    return out
+
+
+@check("VPN-008")
+def _(ctx):
+    srv = [s for s in ovpn_servers(ctx) if (s.findtext("mode") or "server_tls_user").startswith("server")]
+    if not srv:
+        return Result("SKIP", "No remote access OpenVPN servers")
+    pushed = {}
+    for ln in ctx.sec("ovpn_push").splitlines():
+        parts = ln.split()
+        if parts:
+            pushed[parts[0]] = parts[1:]
+    fw = _firewall_addrs(ctx)
+    issues = []
+    for s in srv:
+        name = s.findtext("description") or s.findtext("vpnid") or "server"
+        vid = s.findtext("vpnid") or ""
+        if vid in pushed:
+            dns = pushed[vid]
+        else:
+            dns = [s.findtext(f"dns_server{i}") for i in range(1, 5)]
+            dns = [d.strip() for d in dns if d and d.strip()]
+        local = set(fw)
+        try:
+            net = ipaddress.ip_network((s.findtext("tunnel_network") or "").strip(), strict=False)
+            local.add(next(net.hosts()))
+        except (ValueError, StopIteration):
+            pass
+        if not dns:
+            issues.append(f"{name}: pushes no DNS server, so VPN clients skip the firewall's DNS filtering")
+            continue
+        other = []
+        for d in dns:
+            try:
+                if ipaddress.ip_address(d) not in local:
+                    other.append(d)
+            except ValueError:
+                other.append(d)
+        if other:
+            issues.append(f"{name}: pushes DNS {', '.join(other)}, which is not the firewall")
+    if issues:
+        return Result("WARN", "; ".join(issues) + " (lesson 29)")
+    return Result("PASS", "VPN clients are told to use the firewall for DNS")
+
+
+@check("VPN-009")
+def _(ctx):
+    srv = ovpn_servers(ctx)
+    if not srv:
+        return Result("SKIP", "No OpenVPN servers")
+    warn, info = [], []
+    for s in srv:
+        name = s.findtext("description") or s.findtext("vpnid") or "server"
+        comp = (s.findtext("allow_compression") or "").strip()
+        if comp == "yes":
+            warn.append(f"{name}: compression allowed (VORACLE risk; set Allow Compression to Refuse)")
+        elif comp == "asym":
+            info.append(f"{name}: asymmetric compression (decompresses incoming); Refuse is safest once no client sends compressed data")
+        if (s.findtext("topology") or "").strip() == "net30":
+            warn.append(f"{name}: net30 topology (deprecated; use subnet)")
+    if warn:
+        return Result("WARN", "; ".join(warn + info))
+    if info:
+        return Result("INFO", "; ".join(info))
+    return Result("PASS", "No compression, subnet topology")
+
+
+def _size_bytes(v):
+    m = re.fullmatch(r"(\d+)([kmg]?)", v.strip().lower())
+    if not m:
+        return None
+    return int(m.group(1)) * {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[m.group(2)]
+
+
+@check("DNS-008")
+def _(ctx):
+    eff = {}
+    for ln in ctx.sec("unbound_eff").splitlines():
+        k, _, v = ln.strip().partition(":")
+        eff[k.strip()] = v.strip()  # last value wins, as in Unbound itself
+    if not eff:
+        return Result("SKIP", "Unbound configuration not readable")
+    msg = _size_bytes(eff.get("msg-cache-size", "4m")) or 0
+    pre = eff.get("prefetch", "no") == "yes"
+    raw = ctx.get("unbound/custom_options") or ""
+    try:
+        custom = base64.b64decode(raw).decode(errors="replace") if raw else ""
+    except ValueError:
+        custom = ""
+    in_custom = [k for k in ("msg-cache-size", "rrset-cache-size", "prefetch") if re.search(rf"^\s*{k}\s*:", custom, re.M)]
+    desc = f"message cache {msg // 1024 ** 2} MB, prefetch {'on' if pre else 'off'}"
+    if msg < 10 * 1024 ** 2 or not pre:
+        return Result("WARN", f"Resolver {desc}; a larger cache and prefetch keep common answers fast")
+    if in_custom:
+        return Result("INFO", f"Resolver {desc}, set in custom options ({', '.join(in_custom)}) that override the GUI, which still shows its own values; move them to DNS Resolver > Advanced Settings (lesson 27)")
+    return Result("PASS", f"Resolver {desc}")
+
+
+@check("PFB-009")
+def _(ctx):
+    if not pfb_installed(ctx):
+        return Result("SKIP", "pfBlockerNG DNSBL not configured")
+    if "pfblockerng.php cron" not in ctx.sec("crontab"):
+        return Result("FAIL", "pfBlockerNG update job missing from cron; lists never refresh")
+    parts = ctx.sec("pfb_age").split()
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        return Result("SKIP", "List files not readable")
+    fresh, total = int(parts[0]), int(parts[1])
+    if total == 0:
+        return Result("WARN", "Update job present, but no downloaded list files found")
+    if fresh < total:
+        return Result("WARN", f"{total - fresh} of {total} lists not updated in 48 h; check the pfBlockerNG log for download errors")
+    return Result("PASS", f"Update job present, all {total} lists updated in the last 48 h")
 
 
 @check("MON-003")

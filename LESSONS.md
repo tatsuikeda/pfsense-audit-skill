@@ -159,3 +159,24 @@ The monthly self-update re-tests feeds and updates this table.
 ### 26. Upgrading does not snapshot itself
 `pfSense-upgrade` on CE 2.9 never calls `bectl`, so an update leaves no boot environment to roll back to unless you made one first. Run `bectl create pre-upgrade-<version>` before System > Update, and check `bectl list` shows it. Boot environments live on the same pool, so they do not help if a later version is installed fresh; keep an off-box config backup as well.
 - **Seen on:** CE 2.9.0
+
+### 27. Resolver tuning in custom options hides from the GUI
+- **You see:** DNS Resolver > Advanced Settings shows a 4 MB message cache with prefetch off.
+- **Really:** the tuning (for example `msg-cache-size: 64m`, `prefetch: yes`) was carried over as custom options. pfSense writes its own values first and the custom lines later, and Unbound keeps the last value, so the box runs the custom tuning while the GUI shows the defaults. The next admin who "fixes" the GUI changes nothing, and anyone who deletes the custom block quietly loses the tuning.
+- **Detect:** `unbound-control get_option msg-cache-size` disagrees with the GUI, or the custom options contain `msg-cache-size`, `rrset-cache-size` or `prefetch`.
+- **Fix:** set Message Cache Size and both Prefetch options in Advanced Settings, then remove those lines from custom options.
+- **Seen on:** CE 2.9.0
+
+### 28. Alert email fails silently when the app password is revoked
+- **You see:** SMTP notifications configured, the test sent fine on setup day.
+- **Really:** Google revoked the Gmail app password a day later. Every alert since then failed with `535 BadCredentials`, and the only trace is a `Could not send the message` line in the system log. A UPS or gateway alert in that window would never have arrived.
+- **Detect:** `grep 'Could not send the message' /var/log/system.log`.
+- **Fix:** create a new app password, update System > Advanced > Notifications, and send a test. A new Google app password can take a minute to start working, so one failed test right after the change is not conclusive.
+- **Seen on:** CE 2.9.0
+
+### 29. VPN clients skip DNS filtering unless the server pushes the firewall
+- **You see:** DNSBL and family filtering work on the LAN; VPN users still reach blocked sites.
+- **Really:** an OpenVPN server with no DNS server set leaves clients on their own resolver, and one that pushes a LAN host (the old box pushed a Mac mini) sends their lookups somewhere that does not filter.
+- **Detect:** no `dhcp-option DNS` line, or one that is not a firewall address, in `/var/etc/openvpn/server*/config.ovpn`.
+- **Fix:** set DNS Server 1 on the OpenVPN server to the firewall's LAN address and reconnect the clients.
+- **Seen on:** CE 2.9.0
