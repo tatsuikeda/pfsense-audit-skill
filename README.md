@@ -77,7 +77,7 @@ python3 pfaudit.py 192.0.2.1 --unifi https://unifi.example.com --unifi-ca consol
 
 You get a report grouped 🔴 fix now, 🟠 fix soon, 🔵 FYI, 🟢 good, each with *why it matters* and *how to fix it*. The exit code is non-zero when anything fails, so it slots into scheduled checks.
 
-**How it stays read-only:** only standard FreeBSD and pfSense read commands run on the firewall (`cat`, `pfctl -si`, `sockstat`, `sysctl`, `zpool`, `drill`). Nothing is uploaded or executed there. `config.xml` is parsed in memory on your machine, never written to disk, and secret values never appear in the report.
+**How it stays read-only:** only standard FreeBSD and pfSense read commands run on the firewall (`cat`, `find`, `pfctl -si`, `sockstat`, `sysctl`, `zpool`, `drill`). Nothing is uploaded or executed there. `config.xml` is parsed in memory on your machine, never written to disk, and secret values never appear in the report.
 
 ### 🤖 As a Claude Code skill
 
@@ -86,6 +86,12 @@ git clone https://github.com/tatsuikeda/pfsense-audit-skill ~/.claude/skills/pfs
 ```
 
 Then just ask Claude Code: *"audit the pfSense firewall at 192.0.2.1"* (with your firewall's address). The skill asks how you log in (SSH key preferred, never a pasted password), runs the same read-only audit, and walks you through the 🔴 and 🟠 findings in plain language. It never changes your firewall unless you explicitly ask for a specific fix.
+
+What the skill handles for you:
+
+- **A changed host key stops the run.** It shows you the old and new fingerprints and waits until you have confirmed the new one at the console. It never skips host key checking.
+- **sshguard lockouts.** If SSH times out while ping still answers, it explains that sshguard has blocked your address on the SSH and GUI ports, and how to clear it or wait it out. It can add your own address (a `/32`) to the Login Protection pass list, but only if you ask.
+- **A safety net around every change.** Before a fix or an upgrade it creates a boot environment (`bectl create pre-<change>-<date>`), because `pfSense-upgrade` does not make one itself. After the change it re-runs the audit and confirms AutoConfigBackup has an off-box copy of the new config. It never copies `config.xml` to your machine.
 
 ## 🔍 What it checks
 
@@ -101,7 +107,7 @@ Then just ask Claude Code: *"audit the pfSense firewall at 192.0.2.1"* (with you
 | 🌡️ **Hardware health** | Thermal sensors, disk SMART, ZFS pool health, boot environments, auto power-on after outage (manual check) 🔬 |
 | 🔋 **Power** | NUT status, UPS alerts, shutdown thresholds |
 | 📣 **Monitoring & alerts** | Gateway monitor target, SMTP alerts, certificate expiry alerts, remote syslog |
-| 💾 **Recovery** | AutoConfigBackup actually uploading, local backups, System Patches |
+| 💾 **Recovery** | AutoConfigBackup actually uploading (upload job present, nothing stuck in staging), local backups, System Patches |
 | 📡 **UniFi behind pfSense** | DHCP Guarding and Snooping, guest SSIDs and restricted subnets without a UniFi gateway, controller inform host, auto-upgrade (read-only via `--unifi`; DHCP Guarding, guest SSID and inform host checks not yet run on a live console 🔬) |
 
 ## 🧠 Lessons from the field
@@ -116,6 +122,8 @@ Every check traces back to something real. A taste of [`LESSONS.md`](LESSONS.md)
 | DNSSEC + filtering resolver | Blocked sites show a generic error | Validation rejects the resolver's block answer |
 | Gateway monitor default | Always green | It pings the modem, not the internet |
 | Plain DNS to a filter | Filter "not working" | The ISP gateway answers port 53 itself |
+| Host key mismatch | SSH times out, ping still works | sshguard blocked you on the SSH and GUI ports after the refused connections |
+| Upgrading in place | Update finished fine | No boot environment was made, so there is nothing to roll back to |
 
 ## 🔄 It keeps itself current
 
@@ -151,6 +159,8 @@ flowchart LR
 
 - **Read-only by default.** The audit inspects and reports. It does not change your firewall.
 - **Fixes are opt-in** 🧪 and labelled with what they restart and whether traffic is interrupted.
+- **Every change has a way back.** A boot environment before, a re-run audit and a confirmed AutoConfigBackup copy after. Upgrades get the same treatment.
+- **Host keys are always checked.** A changed key stops the run until you confirm it.
 - **Secrets stay out of reports.** Passwords, keys and tokens are masked.
 - **No data leaves your machine** except the SSH session to your own firewall (and, with `--unifi`, read-only HTTPS requests to your own UniFi console).
 
@@ -158,7 +168,7 @@ flowchart LR
 
 | Version | Status |
 |---|---|
-| pfSense CE 2.9.0 | 🛠️ Developed and tested here |
+| pfSense CE 2.9.0 | 🛠️ Developed and tested here, including a live run on a production site firewall (core checks, `--feeds`, `--updates`) |
 | pfSense 26.10 (CE and Plus merge) | ⏳ Pending validation. Known gaps, including a false DCO WARN and a version check that only recognizes 2.9, are listed in [docs/VALIDATING-26.10.md](docs/VALIDATING-26.10.md). The badge changes to *tested* only after that checklist passes |
 | pfSense Plus 26.03 / 26.07 | 🧪 Planned, not validated (the same known gaps apply) |
 | pfSense CE 2.8.x and older | ➖ Best effort, not a target |
@@ -171,6 +181,9 @@ flowchart LR
 - [ ] UniFi checks run against a live console (lab test of API key access to the legacy API)
 - [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)
 - [x] Claude Code skill (`SKILL.md`)
+- [x] First live run on a production CE 2.9.0 firewall: core checks, `--feeds` and `--updates`, with fixes for what it found
+- [x] Before and after routine for changes and upgrades (boot environment, ACB copy, re-audit)
+- [ ] `--dhcp-scan` and `--external` run live (need a machine on the LAN and one outside it)
 - [ ] Monthly self-update workflow (branch + pull request)
 - [ ] Validation on pfSense 26.10
 - [ ] Opt-in fixes
