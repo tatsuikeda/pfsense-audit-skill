@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tomllib
+import urllib.error
 import urllib.request
 # The only XML parsed is config.xml from the firewall being audited. The stdlib
 # parser does not fetch external entities, so defusedxml is not needed here.
@@ -694,24 +695,63 @@ def external_tests(ctx: Ctx) -> dict:
     return {"ip": ip, "tcp": tcp, "udp": udp}
 
 
+def public_url(url: str) -> bool:
+    """True only for http(s) URLs whose host resolves solely to public addresses."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+    except OSError:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global or ip.is_multicast:
+            return False
+    return True
+
+
+def safe_url(url: str) -> str:
+    """URL for display: no credentials, query string or fragment."""
+    from urllib.parse import urlsplit, urlunsplit
+    p = urlsplit(url)
+    host = p.hostname or ""
+    if p.port:
+        host += f":{p.port}"
+    return urlunsplit((p.scheme, host, p.path, "", "")) + ("?..." if p.query else "")
+
+
+class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not public_url(newurl):
+            raise urllib.error.URLError("redirect to a non-public address blocked")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def feed_tests(ctx: Ctx) -> list:
     urls = set()
     for sec in ("pfblockernglistsv4", "pfblockerngdnsbl"):
         for row in ctx.all(f"installedpackages/{sec}/config/row"):
             if (row.findtext("state") or "Enabled") == "Enabled" and (row.findtext("url") or "").startswith("http"):
                 urls.add(row.findtext("url"))
+    opener = urllib.request.build_opener(_CheckedRedirect)
     out = []
     for u in sorted(urls):
         why = ""
+        if not public_url(u):
+            out.append((safe_url(u), "skipped: not a public address"))
+            continue
         try:
             req = urllib.request.Request(u, headers={"User-Agent": "pfaudit"})
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with opener.open(req, timeout=20) as r:
                 body = r.read(200000)
                 if len(body) < 200:
                     why = f"only {len(body)} bytes"
         except Exception as e:  # noqa: BLE001 report any failure
             why = str(getattr(e, "code", "")) or type(e).__name__
-        out.append((u, why))
+        out.append((safe_url(u), why))
     return out
 
 
