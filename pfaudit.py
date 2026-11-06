@@ -42,9 +42,10 @@ s config; cat /cf/conf/config.xml
 s sockstat; sockstat -4l 2>/dev/null
 s crontab; cat /etc/crontab
 s acbstage; ls /cf/conf/acb 2>/dev/null | wc -l
+s acbold; find /cf/conf/acb -type f -mmin +15 2>/dev/null | wc -l
 s kldstat; kldstat
 s temps; sysctl -a 2>/dev/null | grep -E '^dev\.cpu\.[0-9]+\.temperature'
-s cpufreq; sysctl -n dev.cpu.0.freq_levels 2>/dev/null; sysctl -n dev.cpu.0.cx_supported 2>/dev/null; sysctl -n dev.hwpstate_intel.0.epp 2>/dev/null
+s cpufreq; echo "levels $(sysctl -n dev.cpu.0.freq_levels 2>/dev/null)"; echo "cx $(sysctl -n dev.cpu.0.cx_supported 2>/dev/null)"; echo "epp $(sysctl -n dev.hwpstate_intel.0.epp 2>/dev/null)"
 s aesni_cpu; grep -c AESNI /var/run/dmesg.boot 2>/dev/null
 s zpool; zpool status -x 2>&1
 s smart; for d in $(sysctl -n kern.disks); do echo "$d $(smartctl -H /dev/$d 2>/dev/null | grep -E 'result|Health Status' | sed 's/.*: //')"; done
@@ -242,8 +243,10 @@ def _(ctx):
         dst = r.find("destination")
         to_self = dst is not None and (dst.findtext("network") or "") == "(self)"
         if r.findtext("type") in ("block", "reject") and to_self:
-            note = f" (allowed first: {', '.join(exceptions)})" if exceptions else ""
-            return Result("PASS", "VPN users are blocked from firewall management" + note)
+            if exceptions:
+                return Result("INFO", "VPN users are blocked from firewall management, except "
+                              + ", ".join(exceptions) + " (passed to any before the block); confirm each is deliberate")
+            return Result("PASS", "VPN users are blocked from firewall management")
         if r.findtext("type") == "pass" and is_any(r, "destination"):
             if is_any(r, "source"):
                 return Result("FAIL", "VPN rule passes to any destination, including the firewall GUI and SSH")
@@ -552,9 +555,12 @@ def _(ctx):
     if "acbupload" not in ctx.sec("crontab"):
         return Result("FAIL", "ACB enabled but the upload cron job is missing; backups never leave the box (lesson 1)")
     staged = int(ctx.sec("acbstage") or 0)
+    stale = int(ctx.sec("acbold") or 0)
+    if stale:
+        return Result("WARN", f"ACB upload job present, but {stale} staged backup(s) are over 15 minutes old; uploads are failing (lesson 1)")
     if staged > 10:
         return Result("WARN", f"ACB enabled but {staged} backups are waiting to upload")
-    return Result("PASS", "ACB enabled with upload job")
+    return Result("PASS", "ACB enabled, upload job present, nothing stuck in staging")
 
 
 @check("REC-002")
@@ -654,8 +660,19 @@ def _(ctx):
 
 @check("HW-005")
 def _(ctx):
-    f = ctx.sec("cpufreq")
-    return Result("INFO", "Frequency scaling data: " + (" | ".join(f.splitlines())[:150] if f else "none exposed (scaling likely controlled in BIOS)"))
+    f = dict((ln.split(" ", 1) + [""])[:2] for ln in ctx.sec("cpufreq").splitlines() if ln.strip())
+    levels, cx, epp = (f.get(k, "").strip() for k in ("levels", "cx", "epp"))
+    parts = []
+    if epp:
+        parts.append(f"Intel Speed Shift active, EPP {epp} (0 favours performance, 100 favours power saving)")
+    elif levels:
+        mhz = [lv.split("/")[0] for lv in levels.split()]
+        parts.append(f"OS frequency scaling available, {mhz[-1]} to {mhz[0]} MHz")
+    else:
+        parts.append("No OS frequency scaling exposed (likely fixed or controlled in BIOS)")
+    if cx:
+        parts.append("idle states " + ", ".join(c.split("/")[0] for c in cx.split()))
+    return Result("INFO", "; ".join(parts))
 
 
 @check("HW-006")

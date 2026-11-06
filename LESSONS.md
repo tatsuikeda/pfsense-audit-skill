@@ -155,3 +155,7 @@ The monthly self-update re-tests feeds and updates this table.
 ### 25. Restarting sshguard kills any SSH command that mentions it
 `system_sshguard_stop()` runs `pkill -f` with a pattern that matches `sshguard` anywhere in a command line. If the script you send over SSH contains that word (a `grep sshguard`, a comment, a file name), the restart kills your own shell and the session drops with exit code 255 partway through. The config change itself completes. Run the restart from a script file whose path and contents avoid the word in the command line, or reconnect and verify afterwards.
 - **Seen on:** CE 2.9.0
+
+### 26. Upgrading does not snapshot itself
+`pfSense-upgrade` on CE 2.9 never calls `bectl`, so an update leaves no boot environment to roll back to unless you made one first. Run `bectl create pre-upgrade-<version>` before System > Update, and check `bectl list` shows it. Boot environments live on the same pool, so they do not help if a later version is installed fresh; keep an off-box config backup as well.
+- **Seen on:** CE 2.9.0

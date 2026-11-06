@@ -12,6 +12,8 @@ SHELL=/bin/sh
 1,31	0-5	*	*	*	root	/usr/bin/nice -n20 adjkerntz -a
 @@acbstage
        0
+@@acbold
+       0
 @@kldstat
 Id Refs Address                Size Name
  1   40 0xffffffff80200000  2f2e5b8 kernel

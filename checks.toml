@@ -171,6 +171,8 @@ category = "vpn"
 title = "VPN users reach only what they need"
 risk = "high"
 verify = { config = "filter/rule interface=openvpn: flag source any destination any" }
+fix = "Replace the OpenVPN pass to any rule with rules for only the hosts and ports VPN users need"
+impact = "filter reload"
 verified_on = ["ce-2.9.0"]
 
 [[checks]]
@@ -251,6 +253,8 @@ title = "Clients cannot bypass the firewall's DNS"
 risk = "medium"
 verify = { config = "LAN rules block or redirect outbound 53 and block 853 to anything but the firewall" }
 lesson = 8
+fix = "Firewall > Rules > LAN: block TCP and UDP 853 to anything but the firewall, and redirect port 53 to the firewall with a NAT port forward; add a DoH server blocklist in pfBlockerNG"
+impact = "filter reload"
 verified_on = ["ce-2.9.0"]
 
 [[checks]]
@@ -393,6 +397,8 @@ category = "monitoring"
 title = "Logs leave the box"
 risk = "medium"
 verify = { config = "syslog/remoteserver set" }
+fix = "Status > System Logs > Settings: enable Remote Logging and send to a syslog server off the box"
+impact = "restarts syslogd"
 verified_on = ["ce-2.9.0"]
 
 [[checks]]

@@ -386,6 +386,31 @@ class RecoveryMonitorHardwareTest(unittest.TestCase):
     def test_acb_backlog_warns(self):
         self.assertEqual(run("REC-001", make_ctx(sections={"acbstage": "      25"})).status, "WARN")
 
+    def test_acb_stale_staged_backup_warns(self):
+        r = run("REC-001", make_ctx(sections={"acbstage": "       2", "acbold": "       1"}))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("uploads are failing", r.detail)
+
+    def test_cpufreq_levels_reported_readably(self):
+        r = run("HW-005", make_ctx())
+        self.assertIn("800 to 2000 MHz", r.detail)
+        self.assertIn("idle states C1, C2", r.detail)
+
+    def test_cpufreq_speed_shift(self):
+        r = run("HW-005", make_ctx(sections={"cpufreq": "levels \ncx C1/1/1\nepp 50"}))
+        self.assertIn("Speed Shift active, EPP 50", r.detail)
+
+    def test_cpufreq_nothing_exposed(self):
+        # Seen live on CE 2.9.0: no freq_levels, no hwpstate, only C-states.
+        r = run("HW-005", make_ctx(sections={"cpufreq": "levels \ncx C1/1/1 C2/2/151 C3/3/1034\nepp "}))
+        self.assertEqual(r.detail, "No OS frequency scaling exposed (likely fixed or controlled in BIOS); idle states C1, C2, C3")
+
+    def test_warns_have_fix_text(self):
+        catalog = {c["id"]: c for c in pa.tomllib.loads((pa.HERE / "checks.toml").read_text())["checks"]}
+        for cid in ("VPN-004", "DNS-006", "MON-004"):
+            self.assertTrue(catalog[cid].get("fix"), cid)
+            self.assertTrue(catalog[cid].get("impact"), cid)
+
     def test_patches_without_autoapply(self):
         self.assertEqual(run("REC-002", make_ctx(config=[remove("installedpackages/patches/autoapply_recommended")])).status, "WARN")
 
@@ -644,8 +669,13 @@ class TestAccess007Order(unittest.TestCase):
              '<rule><type>block</type><interface>openvpn</interface><source><any/></source><destination><network>(self)</network><port>FW_MGMT</port></destination></rule>'
              '<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><any/></destination></rule>')
         r = pa.CHECKS["ACCESS-007"](self._ctx(x))
-        self.assertEqual(r.status, "PASS")
+        self.assertEqual(r.status, "INFO")
         self.assertIn("198.51.100.200", r.detail)
+
+    def test_block_self_with_no_exception_passes(self):
+        x = ('<rule><type>block</type><interface>openvpn</interface><source><any/></source><destination><network>(self)</network></destination></rule>'
+             '<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><any/></destination></rule>')
+        self.assertEqual(pa.CHECKS["ACCESS-007"](self._ctx(x)).status, "PASS")
 
     def test_pass_any_before_block_fails(self):
         x = ('<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><any/></destination></rule>'
