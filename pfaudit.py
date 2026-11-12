@@ -53,7 +53,7 @@ s bectl; bectl list -H 2>/dev/null | wc -l
 s unbound; pgrep -x unbound >/dev/null && echo running || echo stopped
 s dns_local; timeout 8 drill example.com @127.0.0.1 2>/dev/null | grep -oE 'rcode: [A-Z]+' | head -1
 s dns_intercept; timeout 5 drill example.com @192.0.2.1 2>/dev/null | grep -E 'rcode|IN[[:space:]]+A[[:space:]]' | grep -v '^;;.*QUEST' | head -2
-s dnsbl_test; d=$(awk -F, 'NR==50{print $2}' /var/unbound/pfb_py_zone.txt 2>/dev/null); if [ -n "$d" ]; then echo "domain $d"; echo "direct $(timeout 6 drill $d @127.0.0.1 2>/dev/null | awk '/[[:space:]]IN[[:space:]]+A[[:space:]]/&&!/^;/{print $NF}' | head -1)"; echo "sub $(timeout 6 drill zz-audit-probe.$d @127.0.0.1 2>/dev/null | awk '/[[:space:]]IN[[:space:]]+A[[:space:]]/&&!/^;/{print $NF}' | head -1)"; fi
+s dnsbl_test; d=$(awk -F, 'NR==50{print $2}' /var/unbound/pfb_py_zone.txt 2>/dev/null); case "$d" in *[!A-Za-z0-9.-]*|-*) d="" ;; esac; if [ -n "$d" ]; then echo "domain $d"; echo "direct $(timeout 6 drill "$d" @127.0.0.1 2>/dev/null | awk '/[[:space:]]IN[[:space:]]+A[[:space:]]/&&!/^;/{print $NF}' | head -1)"; echo "sub $(timeout 6 drill "zz-audit-probe.$d" @127.0.0.1 2>/dev/null | awk '/[[:space:]]IN[[:space:]]+A[[:space:]]/&&!/^;/{print $NF}' | head -1)"; fi
 s sshd; /usr/sbin/sshd -T 2>/dev/null | grep -iE '^(passwordauthentication|kbdinteractiveauthentication|authenticationmethods|pubkeyauthentication|permitrootlogin) '
 s sshd_file; grep -iE '^[[:space:]]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|AuthenticationMethods|PermitRootLogin)' /etc/ssh/sshd_config 2>/dev/null
 s sshd_match; awk 'tolower($1)=="include"{print "include " $2} tolower($1)=="match"{m=$0} m!="" && tolower($1) ~ /^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|authenticationmethods)$/{print m " :: " $0}' /etc/ssh/sshd_config 2>/dev/null
@@ -139,7 +139,8 @@ def tok(text, default: str = "") -> str:
     t = "" if text is None else str(text)
     if not t:
         return default
-    return t if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,39}", t) else val(t, 40)
+    plain = re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,23}(?:[/:][A-Za-z0-9._+-]{1,23})?", t)
+    return t if plain and "www." not in t.lower() else val(t, 40)
 
 
 _MD_ACTIVE = re.compile(r"([\\`*_\[\]<>|~&@#])")  # links, code, HTML, entities, emphasis, cells, mentions, refs
@@ -149,8 +150,8 @@ def md_escape(text: str) -> str:
     """Markdown-escape text so it cannot become a link, heading, HTML, entity, mention, reference or code.
     Bare URLs and e-mail addresses are broken up too, because GitHub-flavoured Markdown links them on its own."""
     t = _MD_ACTIVE.sub(r"\\\1", text)
-    t = re.sub(r"(?i)\b(https?|ftp)://", lambda m: m.group(1) + "\\://", t)
-    return re.sub(r"(?i)\bwww\.", "www\\.", t)
+    t = re.sub(r"(?i)(https?|ftp)://", lambda m: m.group(1) + "\\://", t)  # no \b: "_https://" must break too
+    return re.sub(r"(?i)www\.", lambda m: m.group(0)[:3] + "\\.", t)
 
 
 
@@ -443,7 +444,7 @@ def _(ctx):
 def _(ctx):
     v6 = ctx.get("interfaces/wan/ipaddrv6")
     if v6 or ctx.has("system/ipv6allow"):
-        return Result("INFO", f"IPv6 is enabled (WAN: {v6 or 'none'}); confirm the site uses it")
+        return Result("INFO", f"IPv6 is enabled (WAN: {tok(v6, 'none')}); confirm the site uses it")
     return Result("PASS", "IPv6 off")
 
 
@@ -639,7 +640,8 @@ def _(ctx):
     if not srv:
         return Result("SKIP", "No OpenVPN servers")
     modes = {s.findtext("authmode") or "" for s in srv}
-    return Result("INFO", f"Auth: {', '.join(sorted(modes))}; no MFA detected" if modes <= {"Local Database", ""} else f"Auth: {', '.join(sorted(modes))}")
+    shown = ", ".join(val(m, 60) for m in sorted(modes) if m) or "none"
+    return Result("INFO", f"Auth: {shown}; no MFA detected" if modes <= {"Local Database", ""} else f"Auth: {shown}")
 
 
 @check("VPN-006")
@@ -795,8 +797,14 @@ def _(ctx):
 def _(ctx):
     if not ctx.args.feeds:
         return Result("SKIP", "Run with --feeds to test feed URLs")
-    bad = [f"{val(u, 120)} ({clean(why, 80)})" for u, why in ctx.feeds if why]
-    return Result("WARN", f"{len(bad)} of {len(ctx.feeds)} feeds look dead or stale: " + "; ".join(bad)) if bad else Result("PASS", f"All {len(ctx.feeds)} feeds reachable")
+    untested = [u for u, why in ctx.feeds if why.startswith("not tested")]
+    bad = [f"{val(u, 120)} ({clean(why, 80)})" for u, why in ctx.feeds if why and not why.startswith("not tested")]
+    note = f"; {len(untested)} not tested (time or count limit)" if untested else ""
+    if bad:
+        return Result("WARN", f"{len(bad)} of {len(ctx.feeds)} feeds look dead or stale: " + "; ".join(bad) + note)
+    if untested:
+        return Result("WARN", f"{len(ctx.feeds) - len(untested)} feeds reachable{note}")
+    return Result("PASS", f"All {len(ctx.feeds)} feeds reachable")
 
 
 @check("PFB-005")
@@ -828,10 +836,10 @@ def _(ctx):
     vals = dict(l.split(" ", 1) for l in t.splitlines() if " " in l)
     direct, sub = vals.get("direct", "").strip(), vals.get("sub", "").strip()
     if not direct:
-        return Result("FAIL", f"Listed domain {vals.get('domain')} did not resolve to a block address")
+        return Result("FAIL", f"Listed domain {val(vals.get('domain') or '?', 80)} did not resolve to a block address")
     if sub != direct:
-        return Result("WARN", f"Listed domain blocked ({direct}) but its subdomain was not")
-    return Result("PASS", f"Listed domain and subdomain both blocked ({direct})")
+        return Result("WARN", f"Listed domain blocked ({tok(direct)}) but its subdomain was not")
+    return Result("PASS", f"Listed domain and subdomain both blocked ({tok(direct)})")
 
 
 @check("REC-001")
@@ -1517,7 +1525,10 @@ def safe_url(url: str) -> str:
             host += f":{p.port}"
     except (ValueError, UnicodeError):
         return "(unparseable URL)"
-    return urlunsplit((p.scheme, host, p.path, "", "")) + ("?..." if p.query else "")
+    # A path segment that looks like a key (a long run of letters and digits) is a
+    # credential some feed providers put in the path, not just in the query string.
+    path = "/".join("..." if re.search(r"[A-Za-z0-9_-]{24,}", seg) else seg for seg in p.path.split("/"))
+    return urlunsplit((p.scheme, host, path, "", "")) + ("?..." if p.query else "")
 
 
 def _require_public_peer(sock) -> None:
@@ -1560,6 +1571,10 @@ class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+FEED_MAX = 200
+FEED_BUDGET_SECONDS = 600
+
+
 def feed_tests(ctx: Ctx) -> list:
     urls = set()
     for sec in ("pfblockernglistsv4", "pfblockerngdnsbl"):
@@ -1570,8 +1585,13 @@ def feed_tests(ctx: Ctx) -> list:
     # socket's peer address, so DNS rebinding cannot reach internal hosts.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _PublicHTTPHandler, _PublicHTTPSHandler, _CheckedRedirect)
     out = []
-    for u in sorted(urls):
+    import time
+    deadline = time.monotonic() + FEED_BUDGET_SECONDS
+    for n, u in enumerate(sorted(urls)):
         why = ""
+        if n >= FEED_MAX or time.monotonic() > deadline:
+            out.append((safe_url(u), f"not tested: the feed test stops after {FEED_MAX} feeds or {FEED_BUDGET_SECONDS} s"))
+            continue
         if not public_url(u):
             out.append((safe_url(u), "skipped: not a public address"))
             continue

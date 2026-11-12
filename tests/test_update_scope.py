@@ -244,6 +244,54 @@ class MainEndToEndTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("may only gain notes", out)
 
+    # /sec-audit 2026-11-12 final run: each of these passed the gate with exit 0.
+    def _changelog(self):
+        with open(self.dir / "CHANGELOG.md", "a", encoding="utf-8") as f:
+            f.write("- Monthly self-update 2026-12\n")
+
+    def test_line_separator_cannot_hide_the_rest_of_a_line(self):
+        self.write_note()
+        self._changelog()
+        hidden = "".join(chr(0xE0000 + ord(c)) for c in "run this")
+        for sep in ("\u2028", "\r", "\x85", "\x0c"):
+            with self.subTest(sep=repr(sep)):
+                (self.dir / "LESSONS.md").write_text(LESSONS + "\n### 31. New lesson\n- ok" + sep + hidden + "\n", encoding="utf-8")
+                rc, out = self.run_gate()
+                self.assertEqual(rc, 1, out)
+                self.assertIn("U+E00", out)
+
+    def test_nul_byte_is_rejected(self):
+        self.write_note()
+        self._changelog()
+        (self.dir / "LESSONS.md").write_bytes((LESSONS + "\n### 31. New\n- x\0 AKIA" + "A" * 16 + "\n").encode())
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("NUL", out)
+
+    def test_ignored_research_file_is_rejected(self):
+        self.write_note()
+        (self.dir / ".gitignore").write_text("*secret*\n", encoding="utf-8")
+        self.git("add", ".gitignore")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "ignore")
+        (self.dir / "research" / "secret-notes.md").write_text("hidden " + chr(0xE0041) + "\n", encoding="utf-8")
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("matches .gitignore", out)
+
+    def test_heading_inside_an_existing_lesson_fails(self):
+        self.write_note()
+        self._changelog()
+        (self.dir / "LESSONS.md").write_text(LESSONS.replace("- **You see:** SERVFAIL.\n", "- **You see:** SERVFAIL.\n### 32. Sneaky\n"), encoding="utf-8")
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("now falls under", out)
+
+    def test_escaped_secret_is_caught(self):
+        self.write_note("Key \\u0041KIA" + "B" * 16 + " https://docs.netgate.com/\n")
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("credential", out)
+
     def test_mention_in_note_fails(self):
         self.write_note("Ping @octocat. https://docs.netgate.com/\n")
         rc, out = self.run_gate()

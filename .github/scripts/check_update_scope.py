@@ -104,26 +104,51 @@ def git(*args: str) -> str:
 
 
 def changed_entries() -> list[tuple[str, str]]:
-    """(status, path) for tracked changes against HEAD plus untracked files."""
+    """(status, path) for tracked changes against HEAD plus untracked files, including
+    untracked files that .gitignore hides (status "I?"), which must not escape the scan."""
     out = []
     for line in git("diff", "--name-status", "--no-renames", "HEAD").splitlines():
         status, _, path = line.partition("\t")
         out.append((status, path))
     for path in git("ls-files", "--others", "--exclude-standard").splitlines():
         out.append(("A?", path))
+    for path in git("ls-files", "--others", "--ignored", "--exclude-standard").splitlines():
+        if path in ALLOWED_FILES or RESEARCH_RE.match(path):
+            out.append(("I?", path))
     return out
 
 
+def lines_of(data: bytes, label: str) -> list[str]:
+    """UTF-8 text split on newline only. Python's splitlines() and text-mode pipes also
+    break on (or rewrite) \r, U+2028, U+0085 and others, which would hide whatever
+    follows them from the line scan; and git treats a file with a NUL byte as binary
+    and shows no lines at all. So both are handled here, not left to git or Python."""
+    if b"\0" in data:
+        raise ValueError(f"{label}: contains a NUL byte")
+    return data.decode("utf-8").split("\n")
+
+
+def file_pair(path: str, untracked: bool) -> tuple[list[str], list[str]]:
+    """(lines at HEAD, lines in the working tree), read as bytes."""
+    old = b"" if untracked else subprocess.run(["git", "show", f"HEAD:{path}"], check=True, capture_output=True).stdout
+    return lines_of(old, f"{path} at HEAD"), lines_of(Path(path).read_bytes(), path)
+
+
+def _diff(old: list[str], new: list[str]) -> tuple[list[str], list[str]]:
+    added, removed = [], []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag != "equal":
+            removed += old[i1:i2]
+            added += new[j1:j2]
+    return added, removed
+
+
 def added_lines(path: str, untracked: bool) -> list[str]:
-    if untracked:
-        return Path(path).read_text(encoding="utf-8").splitlines()
-    diff = git("diff", "--unified=0", "--no-color", "HEAD", "--", path)
-    return [l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
+    return _diff(*file_pair(path, untracked))[0]
 
 
 def removed_lines(path: str) -> list[str]:
-    diff = git("diff", "--unified=0", "--no-color", "HEAD", "--", path)
-    return [l[1:] for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")]
+    return _diff(*file_pair(path, False))[1]
 
 
 def looks_encoded(line: str) -> bool:
@@ -190,9 +215,9 @@ def scan_text(path: str, lines: list[str]) -> list[str]:
             mac = m.group(1).lower().replace("-", ":")
             if not mac.startswith(DOC_MAC_PREFIX) and mac not in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
                 errors.append(f"{where}: MAC address {mac} (use 00:00:5e:00:53:xx)")
-        if SECRET_RE.search(line):
+        if SECRET_RE.search(line) or SECRET_RE.search(decoded):
             errors.append(f"{where}: looks like a credential or key")
-        elif looks_encoded(line):
+        elif looks_encoded(line) or looks_encoded(decoded):
             errors.append(f"{where}: long base64 or hex run (possible encoded secret)")
     return errors
 
@@ -242,7 +267,7 @@ def _lesson_map(lines: list[str]) -> list[str | None]:
 
 def lessons_changes(old_text: str, new_text: str) -> list[str]:
     """Errors for LESSONS.md edits other than new lessons and feed table rows."""
-    old, new = old_text.splitlines(), new_text.splitlines()
+    old, new = old_text.split("\n"), new_text.split("\n")
     old_map, new_map = _lesson_map(old), _lesson_map(new)
     old_numbers = {n for n in old_map if n}
     errors = []
@@ -256,6 +281,12 @@ def lessons_changes(old_text: str, new_text: str) -> list[str]:
     sm = difflib.SequenceMatcher(None, old, new, autojunk=False)
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
+            # An unchanged line must stay in the lesson it was in: a new heading slipped
+            # into the middle of a lesson would otherwise move its tail under a new number.
+            for i, j in zip(range(i1, i2), range(j1, j2)):
+                if old_map[i] != new_map[j] and old[i].strip():
+                    errors.append(f"LESSONS.md: line {i + 1} of lesson {old_map[i]} now falls under {new_map[j] or 'no lesson'}; add new lessons at the end of a section")
+                    break
             continue
         for i in range(i1, i2):
             if old[i].strip() and not feed_line(old[i], old_map[i]):
@@ -290,7 +321,10 @@ def main() -> int:
 
     # 1. scope
     for status, path in entries:
-        untracked = status == "A?"
+        untracked = status in ("A?", "I?")
+        if status == "I?":
+            errors.append(f"{path}: matches .gitignore, so it would be skipped; rename it")
+            continue
         if path in ALLOWED_FILES:
             if status not in ("M",):
                 errors.append(f"{path}: status {status}, only in-place modification is allowed")
@@ -312,6 +346,8 @@ def main() -> int:
             errors += scan_text(path, added_lines(path, untracked))
         except UnicodeDecodeError:
             errors.append(f"{path}: not valid UTF-8 text")
+        except ValueError as e:
+            errors.append(str(e))
     mode_changes = [l for l in git("diff", "--summary", "HEAD").splitlines() if "mode change" in l]
     errors += [f"file mode change not allowed: {l.strip()}" for l in mode_changes]
 
@@ -325,16 +361,21 @@ def main() -> int:
     # 3 and 4. history, append-only edits and verification status
     if "checks.toml" in changed:
         try:
-            errors += catalog_changes(git("show", "HEAD:checks.toml"), Path("checks.toml").read_text(encoding="utf-8"))
-        except (tomllib.TOMLDecodeError, subprocess.CalledProcessError, UnicodeDecodeError) as e:
+            old_c, new_c = file_pair("checks.toml", False)
+            errors += catalog_changes("\n".join(old_c), "\n".join(new_c))
+        except (tomllib.TOMLDecodeError, subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as e:
             errors.append(f"checks.toml: cannot compare with HEAD: {e}")
     if "LESSONS.md" in changed:
         try:
-            errors += lessons_changes(git("show", "HEAD:LESSONS.md"), Path("LESSONS.md").read_text(encoding="utf-8"))
-        except (subprocess.CalledProcessError, UnicodeDecodeError) as e:
+            old_l, new_l = file_pair("LESSONS.md", False)
+            errors += lessons_changes("\n".join(old_l), "\n".join(new_l))
+        except (subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as e:
             errors.append(f"LESSONS.md: cannot compare with HEAD: {e}")
     if "CHANGELOG.md" in changed:
-        gone = [l for l in removed_lines("CHANGELOG.md") if l.strip()]
+        try:
+            gone = [l for l in removed_lines("CHANGELOG.md") if l.strip()]
+        except (UnicodeDecodeError, ValueError) as e:
+            gone = [str(e)]
         if gone:
             errors.append(f"CHANGELOG.md: {len(gone)} existing line(s) removed; only additions are allowed")
 
