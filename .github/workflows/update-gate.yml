@@ -1,6 +1,11 @@
 # Re-runs the self-update scope gate on every auto-update/* pull request.
-# The gate script is taken from the base commit, so a pull request cannot
-# loosen its own gate. Read-only: no secrets, no write token.
+# The gate script is taken from the base commit, so editing the script in the
+# pull request changes nothing. This workflow file itself runs from the pull
+# request, though: a pull request that edits it can weaken the check, which is
+# why the path check rejects any .github/ change and a reviewer must too.
+# Required on main, but skipped (and so passing) on branches not named
+# auto-update/*: a self-update under any other branch name is closed unreviewed.
+# Read-only: no secrets, no write token.
 name: Update gate
 
 on:

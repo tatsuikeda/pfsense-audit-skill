@@ -219,7 +219,7 @@ class ChecksTest(unittest.TestCase):
         w["hotspotConfiguration"] = {"type": "CAPTIVE_PORTAL"}
         r = self.run_check("UNIFI-003", collect(routes, refused={f"{LEG}/get/setting"}))
         self.assertEqual(r.status, "WARN")
-        self.assertIn("guest SSID Office has client isolation off", r.detail)
+        self.assertIn('guest SSID "Office" has client isolation off', r.detail)
 
     def test_guest_restrictions_block_firewall(self):
         routes = full_routes()
@@ -236,7 +236,7 @@ class ChecksTest(unittest.TestCase):
         u = collect(full_routes())
         r = self.run_check("UNIFI-005", u)
         self.assertEqual(r.status, "WARN")
-        self.assertIn("ap1 informs to 192.0.2.50", r.detail)
+        self.assertIn('"ap1" informs to "192.0.2.50"', r.detail)
         u["controller_hosts"].append("192.0.2.50")
         self.assertEqual(self.run_check("UNIFI-005", u).status, "PASS")
 
