@@ -226,43 +226,6 @@ def catalog(text: str) -> dict[str, dict]:
     return {c["id"]: c for c in tomllib.loads(text).get("checks", []) if "id" in c}
 
 
-def toml_comments(text: str) -> list[str]:
-    """Every comment in a TOML document, whole-line and inline, in order. A small
-    tokenizer: it tracks basic and literal strings, single- and multi-line, so a '#'
-    inside a string is not a comment and one after a value is."""
-    out, i, n = [], 0, len(text)
-    while i < n:
-        for q in ('"""', "'''"):
-            if text.startswith(q, i):
-                end = text.find(q, i + 3)
-                while q == '"""' and end != -1 and text[end - 1] == "\\" and text[end - 2] != "\\":
-                    end = text.find(q, end + 1)
-                if end != -1:
-                    # TOML lets up to two more quote characters close the string
-                    # (they belong to its content), so """x"""" ends after the 4th quote.
-                    extra = 0
-                    while extra < 2 and end + 3 < n and text[end + 3] == q[0]:
-                        end += 1
-                        extra += 1
-                i = n if end == -1 else end + 3
-                break
-        else:
-            ch = text[i]
-            if ch in "\"'":
-                j = i + 1
-                while j < n and text[j] != ch and text[j] != "\n":
-                    j += 2 if ch == '"' and text[j] == "\\" else 1
-                i = j + 1
-            elif ch == "#":
-                end = text.find("\n", i)
-                end = n if end == -1 else end
-                out.append(text[i:end].strip())
-                i = end
-            else:
-                i += 1
-    return out
-
-
 def catalog_changes(old_text: str, new_text: str) -> list[str]:
     """Errors for checks.toml edits beyond new checks and appended notes."""
     old_doc, new_doc = tomllib.loads(old_text), tomllib.loads(new_text)
@@ -278,13 +241,16 @@ def catalog_changes(old_text: str, new_text: str) -> list[str]:
         missing = [k for k in ("category", "title", "risk", "verified_on") if not isinstance(c.get(k), (str, list))]
         if missing:
             errors.append(f"checks.toml: check {c['id']} is missing {', '.join(missing)}")
-    # Comments are not in the parsed document, so compare them as text: they may not
-    # change, be removed or be added (they carry statements such as "Every check is
-    # read-only" that a reader trusts).
-    def comments(text: str) -> list[str]:
-        return toml_comments(text)
-    if comments(old_text) != comments(new_text):
-        errors.append("checks.toml: comment lines were added, changed or removed; comments are not part of a self-update")
+    # Comments are not in the parsed document. Rather than tokenize TOML (two hand
+    # tokenizers were bypassed in review), no added or removed line may contain "#"
+    # at all; a note that needs one writes the TOML escape \u0023 inside its string.
+    old_lines, new_lines = old_text.split("\n"), new_text.split("\n")
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        if any("#" in l for l in old_lines[i1:i2] + new_lines[j1:j2]):
+            errors.append("checks.toml: an added, changed or removed line contains '#'; comments are not part of a self-update (write \\u0023 inside a string)")
+            break
     ids = [c.get("id") for c in new_doc.get("checks", [])]
     for cid in sorted({i for i in ids if ids.count(i) > 1}, key=str):
         errors.append(f"checks.toml: check id {cid} appears more than once")

@@ -1531,11 +1531,10 @@ def safe_url(url: str) -> str:
     from urllib.parse import unquote
     segs = [x for x in p.path.split("/") if x]
     last = unquote(segs[-1]) if segs else ""
-    def keyish(text: str) -> bool:
-        run = max((len(m) for m in re.findall(r"[A-Za-z0-9_-]+", text)), default=0)
-        mixed = any(re.search(r"[A-Za-z]", m) and re.search(r"\d", m) for m in re.findall(r"[A-Za-z0-9_-]{12,}", text))
-        return run >= 20 or mixed
-    if keyish(last):  # judged on the whole name, extension included
+    # Show the file name only when it is plain words and an extension, with no digits
+    # (hosts.txt, multi-onlydomains.txt); anything else may be a key and is masked.
+    # Two pattern-based maskers were bypassed in review, so this is an allow list.
+    if not re.fullmatch(r"[A-Za-z]{1,15}(?:[._-][A-Za-z]{1,15}){0,5}(?:\.[A-Za-z0-9]{1,5})?", last):
         last = "..."
     path = ("/.../" if len(segs) > 1 else "/") + last if segs else p.path
     return urlunsplit((p.scheme, host, path, "", "")) + ("?..." if p.query else "")
