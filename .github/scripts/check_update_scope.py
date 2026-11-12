@@ -232,6 +232,22 @@ def catalog_changes(old_text: str, new_text: str) -> list[str]:
     errors = []
     if {k: v for k, v in old_doc.items() if k != "checks"} != {k: v for k, v in new_doc.items() if k != "checks"}:
         errors.append("checks.toml: top-level keys changed; only [[checks]] entries may change")
+    # Every entry must be well formed: pfaudit indexes checks by id, and an entry
+    # without one used to crash every audit run.
+    for n, c in enumerate(new_doc.get("checks", []), 1):
+        if not isinstance(c, dict) or not isinstance(c.get("id"), str) or not re.fullmatch(r"[A-Z]+-\d{3}", c["id"]):
+            errors.append(f"checks.toml: check entry {n} has no valid id (like DNS-009)")
+            continue
+        missing = [k for k in ("category", "title", "risk", "verified_on") if not isinstance(c.get(k), (str, list))]
+        if missing:
+            errors.append(f"checks.toml: check {c['id']} is missing {', '.join(missing)}")
+    # Comments are not in the parsed document, so compare them as text: they may not
+    # change, be removed or be added (they carry statements such as "Every check is
+    # read-only" that a reader trusts).
+    def comments(text: str) -> list[str]:
+        return [l.strip() for l in text.split("\n") if l.lstrip().startswith("#")]
+    if comments(old_text) != comments(new_text):
+        errors.append("checks.toml: comment lines were added, changed or removed; comments are not part of a self-update")
     ids = [c.get("id") for c in new_doc.get("checks", [])]
     for cid in sorted({i for i in ids if ids.count(i) > 1}, key=str):
         errors.append(f"checks.toml: check id {cid} appears more than once")

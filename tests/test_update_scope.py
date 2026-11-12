@@ -292,6 +292,25 @@ class MainEndToEndTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("credential", out)
 
+    def test_check_without_id_fails(self):
+        self.write_note()
+        self._changelog()
+        (self.dir / "checks.toml").write_text(CATALOG + '\n[[checks]]\ntitle = "No id"\nverified_on = ["unverified"]\n', encoding="utf-8")
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no valid id", out)
+
+    def test_comment_change_fails(self):
+        self.write_note()
+        self._changelog()
+        (self.dir / "checks.toml").write_text("# Every check is read-only.\n" + CATALOG, encoding="utf-8")
+        self.git("add", "checks.toml")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "c")
+        (self.dir / "checks.toml").write_text("# Checks may change the firewall.\n" + CATALOG, encoding="utf-8")
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("comment lines", out)
+
     def test_mention_in_note_fails(self):
         self.write_note("Ping @octocat. https://docs.netgate.com/\n")
         rc, out = self.run_gate()

@@ -681,7 +681,7 @@ class FeedGuardTest(unittest.TestCase):
 
     def test_safe_url(self):
         self.assertEqual(pa.safe_url("https://user:pw@lists.example.com:8443/path/a.txt?token=abc#frag"),
-                         "https://lists.example.com:8443/path/a.txt?...")
+                         "https://lists.example.com:8443/.../a.txt?...")
         self.assertEqual(pa.safe_url("https://lists.example.com/a.txt"), "https://lists.example.com/a.txt")
         self.assertEqual(pa.safe_url("https://lists.example.com/a.txt#x"), "https://lists.example.com/a.txt")
 
@@ -1166,26 +1166,27 @@ class FinalAuditFixesTest(unittest.TestCase):
     def test_shorter_and_encoded_tokens_are_redacted(self):
         for seg in ("ab12cd34ef56gh", "%61%62%63" + "x" * 20, "k" * 20):
             self.assertIn("/.../", pa.safe_url(f"https://f.example.com/{seg}/list.txt"), seg)
-        self.assertIn("/hagezi/dns-blocklists/", pa.safe_url("https://f.example.com/hagezi/dns-blocklists/main/list.txt"))
+        self.assertEqual(pa.safe_url("https://f.example.com/hagezi/dns-blocklists/main/list.txt"), "https://f.example.com/.../list.txt")
 
     def test_slow_feed_is_cut_off(self):
         class Slow:
             def __enter__(self):
                 return self
+
             def __exit__(self, *a):
                 return False
+
             def read1(self, n):
                 return b"x"  # one byte per raw read, never ends
 
             def read(self, n):
                 raise AssertionError("read() blocks until n bytes; the loop must use read1()")
-        clock = iter(range(0, 10_000, 5))
-        with mock.patch.object(pa.urllib.request, "build_opener") as bo, \
-             mock.patch.object(pa, "public_url", return_value=True), \
-             mock.patch("time.monotonic", side_effect=lambda: next(clock)):
-            bo.return_value.open.return_value = Slow()
-            out = pa.feed_tests(make_ctx())
-        self.assertTrue(out and all(why for _, why in out), out)
+
+        class Opener:
+            def open(self, req, timeout=None):
+                return Slow()
+        import time
+        self.assertEqual(pa._fetch_feed_body(Opener(), "https://f.example.com/x", time.monotonic() + 0.2), "timed out")
 
     def test_dnsbl_domain_is_validated_and_quoted_in_the_remote_script(self):
         line = next(l for l in pa.REMOTE_SCRIPT.splitlines() if l.startswith("s dnsbl_test;"))
@@ -1197,6 +1198,34 @@ class FinalAuditFixesTest(unittest.TestCase):
             r = subprocess.run(["sh", "-c", 'd="$1"; case "$d" in *[!A-Za-z0-9.-]*|-*) d="" ;; esac; printf %s "$d"', "_", d],
                                capture_output=True, text=True, timeout=10)
             self.assertEqual(bool(r.stdout), keep, d)
+
+    def test_catalog_entry_without_id_is_skipped_not_fatal(self):
+        cat = CATALOG + [{"title": "broken entry"}]
+        ids = [r["id"] for r in pa.build(cat, make_ctx())]
+        self.assertEqual(len(ids), len(CATALOG))
+
+    def test_feed_url_shows_host_and_file_name_only(self):
+        for u in ("https://f.example.com/api/SECRETCODE/list.txt", "https://f.example.com/u/1234567890123456/x.txt",
+                  "https://f.example.com/AbCdEfGhIjKlMnOp/hosts"):
+            shown = pa.safe_url(u)
+            self.assertTrue(shown.startswith("https://f.example.com/.../"), shown)
+            for secret in ("SECRETCODE", "1234567890123456", "AbCdEfGhIjKlMnOp"):
+                self.assertNotIn(secret, shown)
+
+    def test_feed_fetch_gives_up_at_the_deadline_whatever_the_stage(self):
+        import threading
+        never = threading.Event()
+
+        class Opener:
+            def open(self, req, timeout=None):
+                never.wait(5)  # stuck in connect or headers
+                raise OSError("unreachable")
+        import time
+        t0 = time.monotonic()
+        why = pa._fetch_feed(Opener(), "https://f.example.com/x", time.monotonic() + 0.3)
+        self.assertEqual(why, "timed out")
+        self.assertLess(time.monotonic() - t0, 2)
+        never.set()
 
     def test_feed_budget_marks_rest_untested(self):
         ctx = make_ctx()

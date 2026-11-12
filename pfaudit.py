@@ -357,9 +357,9 @@ def _(ctx):
     else:
         base = Result("PASS", f"SSH enabled, key authentication only ({src})")
     if loosened:
-        return Result("FAIL", "A Match block in sshd_config re-enables password login: " + "; ".join(loosened)[:200])
+        return Result("FAIL", "A Match block in sshd_config re-enables password login: " + "; ".join(val(x, 80) for x in loosened)[:240])
     if includes:  # Match blocks inside included files are not read
-        return Result("WARN", base.detail + "; sshd_config includes other files whose Match blocks were not read: " + ", ".join(i.split()[1] for i in includes)[:160])
+        return Result("WARN", base.detail + "; sshd_config includes other files whose Match blocks were not read: " + ", ".join(val(i.split(None, 1)[-1], 80) for i in includes)[:200])
     return base
 
 
@@ -780,7 +780,7 @@ def _(ctx):
             vip = v.findtext("subnet")
     listening = "lighttpd_pfb" in ctx.sec("sockstat") or "lighttpd_p" in ctx.sec("sockstat")
     if vip and listening:
-        return Result("PASS", f"DNSBL VIP {vip} configured and listening")
+        return Result("PASS", f"DNSBL VIP {tok(vip)} configured and listening")
     if ctx.get(f"{PFB}/pfb_dnsvip") and not ref:
         return Result("FAIL", "Old pfb_dnsvip setting is ignored by 3.2.17; DNSBL is effectively off (lesson 9)")
     return Result("FAIL", "DNSBL VIP missing or not listening")
@@ -972,7 +972,7 @@ def _(ctx):
                 if ipaddress.ip_address(d) not in local:
                     other.append(d)
             except ValueError:
-                other.append(d)
+                other.append(val(d, 60))
         if other:
             issues.append(f"{name}: pushes DNS {', '.join(other)}, which is not the firewall")
     if issues:
@@ -1139,7 +1139,7 @@ def _(ctx):
     for name, el in els.items():
         if el.find("enable") is not None and (el.findtext("ipaddrv6") or "") == "track6":
             involved |= {name, el.findtext("track6-interface") or ""}
-    forced = [f"{n} ({' '.join(x for x in (els[n].findtext('media'), els[n].findtext('mediaopt')) if x)})"
+    forced = [f"{n} ({val(' '.join(x for x in (els[n].findtext('media'), els[n].findtext('mediaopt')) if x), 40)})"
               for n in sorted(involved) if n in els and (els[n].findtext("media") or els[n].findtext("mediaopt"))]
     if not involved:
         return Result("SKIP", "No interface uses IPv6 Track Interface")
@@ -1525,15 +1525,15 @@ def safe_url(url: str) -> str:
             host += f":{p.port}"
     except (ValueError, UnicodeError):
         return "(unparseable URL)"
-    # A path segment that looks like a key (a long run of letters and digits) is a
-    # credential some feed providers put in the path, not just in the query string.
+    # Show the host and the file name only: feed providers put keys in path segments
+    # of any length and shape, so no pattern can tell them apart reliably. The last
+    # segment is still masked when it looks like a key.
     from urllib.parse import unquote
-
-    def secretish(seg: str) -> bool:
-        s = unquote(seg)
-        run = max((len(m) for m in re.findall(r"[A-Za-z0-9_-]+", s)), default=0)
-        return run >= 20 or (run >= 12 and bool(re.search(r"[A-Za-z]", s)) and bool(re.search(r"\d", s)))
-    path = "/".join("..." if secretish(seg) else seg for seg in p.path.split("/"))
+    segs = [x for x in p.path.split("/") if x]
+    last = unquote(segs[-1]) if segs else ""
+    if re.search(r"[A-Za-z0-9_-]{20,}", last) or (re.search(r"\d{4,}", last) and re.search(r"[A-Za-z]{2,}", last) and "." not in last):
+        last = "..."
+    path = ("/.../" if len(segs) > 1 else "/") + last if segs else p.path
     return urlunsplit((p.scheme, host, path, "", "")) + ("?..." if p.query else "")
 
 
@@ -1571,6 +1571,7 @@ class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
 
 
 class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    max_redirections = 5  # the default is 10
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not public_url(newurl):
             raise urllib.error.URLError("redirect to a non-public address blocked")
@@ -1602,27 +1603,43 @@ def feed_tests(ctx: Ctx) -> list:
         if not public_url(u):
             out.append((safe_url(u), "skipped: not a public address"))
             continue
-        try:
-            req = urllib.request.Request(u, headers={"User-Agent": "pfaudit"})
-            # The socket timeout bounds each read, not the whole fetch: a server that
-            # trickles bytes could hold it far longer. Read in chunks against a
-            # per-feed deadline (and the overall one) instead.
-            stop = min(deadline, time.monotonic() + FEED_SECONDS)
-            with opener.open(req, timeout=20) as r:
-                body = b""
-                while len(body) < 200000:
-                    if time.monotonic() > stop:
-                        raise TimeoutError("feed download took too long")
-                    chunk = r.read1(16384)  # one underlying read; read() would wait for all 16 KB
-                    if not chunk:
-                        break
-                    body += chunk
-                if len(body) < 200:
-                    why = f"only {len(body)} bytes"
-        except Exception as e:  # noqa: BLE001 report any failure
-            why = str(getattr(e, "code", "")) or type(e).__name__
+        why = _fetch_feed(opener, u, min(deadline, time.monotonic() + FEED_SECONDS))
         out.append((safe_url(u), why))
     return out
+
+
+def _fetch_feed(opener, u: str, stop: float) -> str:
+    """Fetch one feed in a worker thread and give up at `stop`, whatever stage the
+    transfer is in (connect, headers, redirects, chunked body). A worker that is still
+    running is abandoned; it is a daemon and dies with the process."""
+    import threading
+    import time
+    result = {"why": "timed out"}
+
+    def work():
+        result["why"] = _fetch_feed_body(opener, u, stop)
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(max(0.0, stop - time.monotonic()))
+    return result["why"] if not t.is_alive() else "timed out"
+
+
+def _fetch_feed_body(opener, u: str, stop: float) -> str:
+    import time
+    try:
+        req = urllib.request.Request(u, headers={"User-Agent": "pfaudit"})
+        with opener.open(req, timeout=20) as r:
+            body = b""
+            while len(body) < 200000:
+                if time.monotonic() > stop:
+                    return "timed out"
+                chunk = r.read1(16384)  # one underlying read; read() would wait for all 16 KB
+                if not chunk:
+                    break
+                body += chunk
+            return f"only {len(body)} bytes" if len(body) < 200 else ""
+    except Exception as e:  # noqa: BLE001 report any failure
+        return str(getattr(e, "code", "")) or type(e).__name__
 
 
 # ---------------------------------------------------------------------- UniFi
@@ -1830,6 +1847,10 @@ RISK = {"high": 0, "medium": 1, "low": 2, "info": 3}
 def build(catalog, ctx):
     results = []
     for c in catalog:
+        if not isinstance(c.get("id"), str) or not re.fullmatch(r"[A-Z]+-\d{3}", c["id"]):
+            print(f"warning: checks.toml entry without a valid id skipped: {clean(str(c.get('title', '?')), 60)}", file=sys.stderr)
+            continue
+        c = {"title": c["id"], "risk": "info", "category": "?", **c}
         fn = CHECKS.get(c["id"])
         try:
             r = fn(ctx) if fn else Result("SKIP", "No implementation yet")
@@ -1837,7 +1858,7 @@ def build(catalog, ctx):
             r = (Result("SKIP", "Needs a live firewall; not checked in a config-file audit") if ctx.offline
                  else Result("WARN", f"Not checked: the firewall did not return '{e}' (remote run incomplete)"))
         except Exception as e:  # noqa: BLE001 one broken check must not stop the audit
-            r = Result("SKIP", f"Check error: {type(e).__name__}: {e}")
+            r = Result("SKIP", f"Check error: {type(e).__name__}: {val(e, 120)}")
         r = Result(r.status, clean(r.detail))
         unverified = "unverified" in c.get("verified_on", [])
         if unverified and r.status == "FAIL":
