@@ -201,3 +201,8 @@ Found a trap we missed? Open an issue with what you saw, what was really happeni
 <div align="center">
 <sub>Not affiliated with Netgate. pfSense is a trademark of Rubicon Communications, LLC (Netgate).</sub>
 </div>
+
+
+## About the author
+
+Built by Tatsu Ikeda of [Tech Health Ventures](https://techhealthventures.com), an AI, IT and engineering consultancy in Boston. More free tools are listed at [techhealthventures.com/open-source](https://techhealthventures.com/open-source).
