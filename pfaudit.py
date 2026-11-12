@@ -1613,7 +1613,7 @@ def feed_tests(ctx: Ctx) -> list:
                 while len(body) < 200000:
                     if time.monotonic() > stop:
                         raise TimeoutError("feed download took too long")
-                    chunk = r.read(16384)
+                    chunk = r.read1(16384)  # one underlying read; read() would wait for all 16 KB
                     if not chunk:
                         break
                     body += chunk

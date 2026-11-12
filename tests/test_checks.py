@@ -1174,8 +1174,11 @@ class FinalAuditFixesTest(unittest.TestCase):
                 return self
             def __exit__(self, *a):
                 return False
+            def read1(self, n):
+                return b"x"  # one byte per raw read, never ends
+
             def read(self, n):
-                return b"x"  # one byte per call, never ends
+                raise AssertionError("read() blocks until n bytes; the loop must use read1()")
         clock = iter(range(0, 10_000, 5))
         with mock.patch.object(pa.urllib.request, "build_opener") as bo, \
              mock.patch.object(pa, "public_url", return_value=True), \
