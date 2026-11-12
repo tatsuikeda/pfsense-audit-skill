@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- The TOML comment tokenizer closes multi-line strings the way TOML does (up to two extra quote characters belong to the string), so a comment after `"""x""""` is seen.
+
 - Review follow-ups: the `checks.toml` comment lock reads inline comments too (a small TOML tokenizer that ignores `#` inside strings), and a key-like feed file name is masked even when it has an extension.
 
 - Remaining low findings: the self-update gate requires a valid id and the core fields on every check and keeps `checks.toml` comment lines unchanged, and pfaudit skips a malformed catalog entry instead of crashing. Each feed is fetched in a worker thread with one deadline covering connect, headers, redirects (at most 5) and body, feed URLs show only the host and file name, and the VPN DNS values, sshd Match and Include lines, DNSBL VIP, Speed and Duplex values and check error text are quoted.
