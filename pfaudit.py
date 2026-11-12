@@ -1752,6 +1752,9 @@ def main():
         ap.error("give either a firewall host or --config-file, not both")
     if args.config_file and (args.dhcp_scan or args.updates):
         ap.error("--dhcp-scan and --updates need a live firewall")
+    if args.config_file and args.external and not args.wan_ip:
+        # A saved file may not be your own: never take a probe target from it.
+        ap.error("--external with --config-file needs an explicit --wan-ip")
 
     catalog = tomllib.loads((HERE / "checks.toml").read_text())["checks"]
     if args.config_file:
