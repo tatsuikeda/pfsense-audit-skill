@@ -43,8 +43,14 @@ domain ads.example.com
 direct
 sub
 @@sshd
+passwordauthentication yes
+kbdinteractiveauthentication yes
+pubkeyauthentication yes
+authenticationmethods any
+@@sshd_file
 PasswordAuthentication yes
 KbdInteractiveAuthentication yes
+@@sshd_match
 @@ups
 ups1 OB LB
 @@ifconfig
@@ -67,8 +73,11 @@ prefetch: no
 @@smtpfail
 2026 Nov 06 09:00:00
 Nov  5 21:32:00
+@@end
 @@updates
 >>> Updating repositories metadata...
 2.9.1 version of pfSense is available
 @@dhcpscan
 12:00:00.000001 00:00:5e:00:53:66 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 192.0.2.99.67 > 255.255.255.255.68: BOOTP/DHCP, Reply, length 300
+@@dhcpscan_rc
+0

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- Fixes from a code review by a reader on r/PFSENSE. Each one could let a check pass on data it never saw:
+  - **ACCESS-003** reads the effective SSH settings with `sshd -T`, so Include files and OpenSSH defaults count. Without `sshd -T` it now needs an explicit `no` (a missing setting defaults to yes). A Match block that turns passwords back on fails. "Public Key + Password" mode is recognised as key-required instead of failing.
+  - **VPN-004** checks OpenVPN instances assigned as their own interface and floating rules, flags rules to a whole interface subnet, and expands host and network aliases (one that cannot be resolved offline is flagged). Findings name the port and the address family.
+  - **PERIM-005**: the UDP probe tells a reply (open), an ICMP unreachable (closed) and silence apart. Silence is never treated as closed: if a WAN rule or port forward allows the port, the check warns. The SSDP probe now uses a unicast M-SEARCH.
+  - **Run completeness**: the remote script ends with an end marker. A missing section turns every check that needs it into WARN, the report shows a banner, and the exit code is 2 when nothing failed.
+  - **UNIFI-006**: the LAN interface name is validated before it reaches a remote command, and a capture that never ran (tcpdump exit other than 0 or 124) warns instead of reporting no rogue servers.
+  - **UniFi**: list paging is all or nothing. A list that ends short, or has no total and needs more pages, raises instead of returning part of it (it used to stop silently at 20,000 items).
+  - **REC-004** with `--updates` and no answer now warns instead of skipping.
+- `--config-file PATH` audits a saved `config.xml` with no live firewall, as a reader asked. Config-only checks run; the ones that need the live box report SKIP.
+- HW-007 and lesson 30, from a reader report: a forced Speed and Duplex (even `autoselect`) on an IPv6 Track Interface link is reapplied on every reconfigure, and users report flapping. Unverified, so WARN at most. 62 checks.
+
 - Correction to lesson 26: `pfSense-upgrade` does call `bectl`, but its clone-and-upgrade boot environment path runs only on Plus, so CE still upgrades in place. Added that its `be_prune` step destroys all boot environments on layouts that fail its check; `SKILL.md` now checks the layout before relying on a pre-upgrade boot environment.
 
 - Five new checks from a real site build log, each confirmed on a live CE 2.9.0 box: ACCESS-008 (legacy MD5 password hashes), VPN-008 (VPN clients use the firewall for DNS), VPN-009 (no compression or net30), DNS-008 (resolver cache and prefetch, and tuning hidden in custom options), PFB-009 (lists actually refreshing). MON-002 now reads the system log for recent send failures instead of only checking that SMTP is configured. Lessons 27 to 29. 61 checks.

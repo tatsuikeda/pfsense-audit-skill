@@ -43,6 +43,7 @@ git clone https://github.com/tatsuikeda/pfsense-audit-skill
 cd pfsense-audit-skill
 python3 pfaudit.py 192.0.2.1                         # your firewall's address; SSH key auth as admin
 python3 pfaudit.py 192.0.2.1 --external --feeds      # add outside-in probes and feed health
+python3 pfaudit.py --config-file config-backup.xml   # no live box: audit a saved config.xml
 ```
 
 | Flag | What it adds |
@@ -51,6 +52,7 @@ python3 pfaudit.py 192.0.2.1 --external --feeds      # add outside-in probes and
 | `--feeds` | Tests every pfBlockerNG feed URL for dead or empty lists |
 | `--updates` | Asks the firewall to check for pfSense updates |
 | `--dhcp-scan` | Listens 45 seconds on the LAN for rogue DHCP servers |
+| `--config-file PATH` | Audits a saved `config.xml` (Diagnostics > Backup & Restore) with no SSH. Config-only checks run; checks that need the live box show as not checked |
 | `--unifi URL` | Reads a UniFi OS console (read-only GETs) for the UniFi checks, e.g. `--unifi https://unifi.example.com` |
 | `--unifi-key-env NAME` | Environment variable holding the UniFi API key (default `UNIFI_API_KEY`). The key itself is never a flag |
 | `--unifi-site NAME` | UniFi site short name, default `default` |
@@ -95,7 +97,7 @@ What the skill handles for you:
 
 ## 🔍 What it checks
 
-**61 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
+**62 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
 
 | Area | Highlights |
 |---|---|
@@ -177,15 +179,16 @@ flowchart LR
 
 ## 🗺️ Roadmap
 
-- [x] `LESSONS.md`: 29 traps, written up with symptoms and fixes
-- [x] `checks.toml`: 61 checks with versions, risk, verify and fix steps (55 with a confirmed version, 5 unverified, 1 manual)
+- [x] `LESSONS.md`: 30 traps, written up with symptoms and fixes
+- [x] `checks.toml`: 62 checks with versions, risk, verify and fix steps (55 with a confirmed version, 6 unverified, 1 manual)
 - [x] Read-only UniFi controller checks (`--unifi`)
 - [ ] UniFi checks run against a live console (lab test of API key access to the legacy API)
 - [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)
 - [x] Claude Code skill (`SKILL.md`)
 - [x] First live run on a production CE 2.9.0 firewall: core checks, `--feeds` and `--updates`, with fixes for what it found
 - [x] Before and after routine for changes and upgrades (boot environment, ACB copy, re-audit)
-- [ ] `--dhcp-scan` and `--external` run live (need a machine on the LAN and one outside it)
+- [x] `--dhcp-scan` run live on CE 2.9.0
+- [ ] `--external` run live (needs a machine outside the network)
 - [ ] Monthly self-update workflow (branch + pull request)
 - [ ] Validation on pfSense 26.10
 - [ ] Opt-in fixes

@@ -50,10 +50,17 @@ domain ads.example.com
 direct 198.51.100.250
 sub 198.51.100.250
 @@sshd
+passwordauthentication no
+kbdinteractiveauthentication no
+pubkeyauthentication yes
+authenticationmethods any
+permitrootlogin yes
+@@sshd_file
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
 PermitRootLogin yes
+@@sshd_match
 @@ups
 ups1 OL CHRG
 @@ifconfig
@@ -84,6 +91,9 @@ prefetch: yes
 @@smtpfail
 2026 Nov 06 09:00:00
 
+@@end
 @@updates
 Your system is up to date
 @@dhcpscan
+@@dhcpscan_rc
+124

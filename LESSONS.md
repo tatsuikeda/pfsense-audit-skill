@@ -183,3 +183,10 @@ The monthly self-update re-tests feeds and updates this table.
 - **Detect:** no `dhcp-option DNS` line, or one that is not a firewall address, in `/var/etc/openvpn/server*/config.ovpn`.
 - **Fix:** set DNS Server 1 on the OpenVPN server to the firewall's LAN address and reconnect the clients.
 - **Seen on:** CE 2.9.0
+
+### 30. "Auto-negotiate" is not the same as "Default" on IPv6 tracking interfaces
+- **You see:** an interface that otherwise works drops and comes back, over and over, once IPv6 Track Interface is on.
+- **Really:** Speed and Duplex "Default (no preference)" stores nothing. Picking any value, including `autoselect`, stores it in `config.xml`, and `interface_configure()` reapplies it with `ifconfig ... media` every time the interface is reconfigured. Track Interface reconfigures often (prefix and RA changes), and each reapply can renegotiate the link.
+- **Detect:** `media` or `mediaopt` set on an interface whose `ipaddrv6` is `track6`, or on the interface it tracks.
+- **Fix:** set Speed and Duplex back to Default unless the link truly needs a fixed speed.
+- **Source:** reported by a reader on r/PFSENSE, who traced it to redmine issues 9241 and 4428. The reapply-on-reconfigure behaviour is confirmed in the pfSense source; the flapping itself has not been reproduced here, so the check reports WARN at most.
