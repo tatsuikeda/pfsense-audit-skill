@@ -1531,7 +1531,11 @@ def safe_url(url: str) -> str:
     from urllib.parse import unquote
     segs = [x for x in p.path.split("/") if x]
     last = unquote(segs[-1]) if segs else ""
-    if re.search(r"[A-Za-z0-9_-]{20,}", last) or (re.search(r"\d{4,}", last) and re.search(r"[A-Za-z]{2,}", last) and "." not in last):
+    def keyish(text: str) -> bool:
+        run = max((len(m) for m in re.findall(r"[A-Za-z0-9_-]+", text)), default=0)
+        mixed = any(re.search(r"[A-Za-z]", m) and re.search(r"\d", m) for m in re.findall(r"[A-Za-z0-9_-]{12,}", text))
+        return run >= 20 or mixed
+    if keyish(last):  # judged on the whole name, extension included
         last = "..."
     path = ("/.../" if len(segs) > 1 else "/") + last if segs else p.path
     return urlunsplit((p.scheme, host, path, "", "")) + ("?..." if p.query else "")

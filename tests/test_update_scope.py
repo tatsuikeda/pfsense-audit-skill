@@ -311,6 +311,18 @@ class MainEndToEndTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("comment lines", out)
 
+    def test_inline_comment_change_fails(self):
+        self.write_note()
+        self._changelog()
+        changed = CATALOG.replace("\n", " # checks are read-only\n", 1)
+        (self.dir / "checks.toml").write_text(changed, encoding="utf-8")
+        rc, out = self.run_gate()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("comment lines", out)
+
+    def test_hash_inside_string_is_not_a_comment(self):
+        self.assertEqual(gate.toml_comments('a = "x # y"\nb = \'p # q\'\nc = """\n# z\n"""\n'), [])
+
     def test_mention_in_note_fails(self):
         self.write_note("Ping @octocat. https://docs.netgate.com/\n")
         rc, out = self.run_gate()
