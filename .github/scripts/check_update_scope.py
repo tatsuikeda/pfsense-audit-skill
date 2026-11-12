@@ -226,6 +226,36 @@ def catalog(text: str) -> dict[str, dict]:
     return {c["id"]: c for c in tomllib.loads(text).get("checks", []) if "id" in c}
 
 
+def toml_comments(text: str) -> list[str]:
+    """Every comment in a TOML document, whole-line and inline, in order. A small
+    tokenizer: it tracks basic and literal strings, single- and multi-line, so a '#'
+    inside a string is not a comment and one after a value is."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        for q in ('"""', "'''"):
+            if text.startswith(q, i):
+                end = text.find(q, i + 3)
+                while q == '"""' and end != -1 and text[end - 1] == "\\" and text[end - 2] != "\\":
+                    end = text.find(q, end + 1)
+                i = n if end == -1 else end + 3
+                break
+        else:
+            ch = text[i]
+            if ch in "\"'":
+                j = i + 1
+                while j < n and text[j] != ch and text[j] != "\n":
+                    j += 2 if ch == '"' and text[j] == "\\" else 1
+                i = j + 1
+            elif ch == "#":
+                end = text.find("\n", i)
+                end = n if end == -1 else end
+                out.append(text[i:end].strip())
+                i = end
+            else:
+                i += 1
+    return out
+
+
 def catalog_changes(old_text: str, new_text: str) -> list[str]:
     """Errors for checks.toml edits beyond new checks and appended notes."""
     old_doc, new_doc = tomllib.loads(old_text), tomllib.loads(new_text)
@@ -245,7 +275,7 @@ def catalog_changes(old_text: str, new_text: str) -> list[str]:
     # change, be removed or be added (they carry statements such as "Every check is
     # read-only" that a reader trusts).
     def comments(text: str) -> list[str]:
-        return [l.strip() for l in text.split("\n") if l.lstrip().startswith("#")]
+        return toml_comments(text)
     if comments(old_text) != comments(new_text):
         errors.append("checks.toml: comment lines were added, changed or removed; comments are not part of a self-update")
     ids = [c.get("id") for c in new_doc.get("checks", [])]

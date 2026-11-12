@@ -1214,6 +1214,11 @@ class FinalAuditFixesTest(unittest.TestCase):
             for secret in ("SECRETCODE", "1234567890123456", "AbCdEfGhIjKlMnOp"):
                 self.assertNotIn(secret, shown)
 
+    def test_key_like_file_name_with_extension_is_masked(self):
+        for name in ("a1b2c3d4e5f6g7.txt", "k" * 24 + ".csv", "abcdef123456789.json"):
+            self.assertTrue(pa.safe_url(f"https://f.example.com/x/{name}").endswith("/.../..."), name)
+        self.assertTrue(pa.safe_url("https://f.example.com/x/hosts.txt").endswith("/hosts.txt"))
+
     def test_feed_fetch_gives_up_at_the_deadline_whatever_the_stage(self):
         import threading
         never = threading.Event()
