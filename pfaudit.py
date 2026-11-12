@@ -1527,7 +1527,13 @@ def safe_url(url: str) -> str:
         return "(unparseable URL)"
     # A path segment that looks like a key (a long run of letters and digits) is a
     # credential some feed providers put in the path, not just in the query string.
-    path = "/".join("..." if re.search(r"[A-Za-z0-9_-]{24,}", seg) else seg for seg in p.path.split("/"))
+    from urllib.parse import unquote
+
+    def secretish(seg: str) -> bool:
+        s = unquote(seg)
+        run = max((len(m) for m in re.findall(r"[A-Za-z0-9_-]+", s)), default=0)
+        return run >= 20 or (run >= 12 and bool(re.search(r"[A-Za-z]", s)) and bool(re.search(r"\d", s)))
+    path = "/".join("..." if secretish(seg) else seg for seg in p.path.split("/"))
     return urlunsplit((p.scheme, host, path, "", "")) + ("?..." if p.query else "")
 
 
@@ -1573,6 +1579,7 @@ class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
 
 FEED_MAX = 200
 FEED_BUDGET_SECONDS = 600
+FEED_SECONDS = 30  # one feed, connect to last byte read
 
 
 def feed_tests(ctx: Ctx) -> list:
@@ -1597,8 +1604,19 @@ def feed_tests(ctx: Ctx) -> list:
             continue
         try:
             req = urllib.request.Request(u, headers={"User-Agent": "pfaudit"})
+            # The socket timeout bounds each read, not the whole fetch: a server that
+            # trickles bytes could hold it far longer. Read in chunks against a
+            # per-feed deadline (and the overall one) instead.
+            stop = min(deadline, time.monotonic() + FEED_SECONDS)
             with opener.open(req, timeout=20) as r:
-                body = r.read(200000)
+                body = b""
+                while len(body) < 200000:
+                    if time.monotonic() > stop:
+                        raise TimeoutError("feed download took too long")
+                    chunk = r.read(16384)
+                    if not chunk:
+                        break
+                    body += chunk
                 if len(body) < 200:
                     why = f"only {len(body)} bytes"
         except Exception as e:  # noqa: BLE001 report any failure

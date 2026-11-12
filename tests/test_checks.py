@@ -1163,6 +1163,27 @@ class FinalAuditFixesTest(unittest.TestCase):
         self.assertNotIn("k" * 32, u)
         self.assertTrue(u.endswith("/.../list.txt?..."), u)
 
+    def test_shorter_and_encoded_tokens_are_redacted(self):
+        for seg in ("ab12cd34ef56gh", "%61%62%63" + "x" * 20, "k" * 20):
+            self.assertIn("/.../", pa.safe_url(f"https://f.example.com/{seg}/list.txt"), seg)
+        self.assertIn("/hagezi/dns-blocklists/", pa.safe_url("https://f.example.com/hagezi/dns-blocklists/main/list.txt"))
+
+    def test_slow_feed_is_cut_off(self):
+        class Slow:
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self, n):
+                return b"x"  # one byte per call, never ends
+        clock = iter(range(0, 10_000, 5))
+        with mock.patch.object(pa.urllib.request, "build_opener") as bo, \
+             mock.patch.object(pa, "public_url", return_value=True), \
+             mock.patch("time.monotonic", side_effect=lambda: next(clock)):
+            bo.return_value.open.return_value = Slow()
+            out = pa.feed_tests(make_ctx())
+        self.assertTrue(out and all(why for _, why in out), out)
+
     def test_dnsbl_domain_is_validated_and_quoted_in_the_remote_script(self):
         line = next(l for l in pa.REMOTE_SCRIPT.splitlines() if l.startswith("s dnsbl_test;"))
         self.assertIn('case "$d" in *[!A-Za-z0-9.-]*|-*) d="" ;; esac', line)
