@@ -237,6 +237,13 @@ def toml_comments(text: str) -> list[str]:
                 end = text.find(q, i + 3)
                 while q == '"""' and end != -1 and text[end - 1] == "\\" and text[end - 2] != "\\":
                     end = text.find(q, end + 1)
+                if end != -1:
+                    # TOML lets up to two more quote characters close the string
+                    # (they belong to its content), so """x"""" ends after the 4th quote.
+                    extra = 0
+                    while extra < 2 and end + 3 < n and text[end + 3] == q[0]:
+                        end += 1
+                        extra += 1
                 i = n if end == -1 else end + 3
                 break
         else:
