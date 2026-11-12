@@ -1177,7 +1177,9 @@ class FinalAuditFixesTest(unittest.TestCase):
                 return False
 
             def read1(self, n):
-                return b"x"  # one byte per raw read, never ends
+                import time
+                time.sleep(0.02)  # a trickling server: one byte every 20 ms, never finishes
+                return b"x"
 
             def read(self, n):
                 raise AssertionError("read() blocks until n bytes; the loop must use read1()")
