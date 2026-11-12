@@ -22,6 +22,7 @@ Optional flags, add them when the user wants a deeper check:
 | `--feeds` | pfBlockerNG is in use; tests every feed for dead or empty lists |
 | `--updates` | the user wants to know about pending pfSense updates (slow) |
 | `--dhcp-scan` | there are signs of a rogue DHCP server, or any UniFi or mixed network (listens 45 s) |
+| `--config-file PATH` | the user has a saved `config.xml` but no SSH access to the box (replaces the host; config-only checks run, the rest SKIP). Never paste the file's contents into the conversation |
 | `--unifi https://<console>` | the site has UniFi switches or Wi-Fi managed by a UniFi OS console (Cloud Key, UDM, UCG, UniFi OS Server); runs UNIFI-001 to 005 and 007 |
 | `--json` | you want to post-process the results |
 

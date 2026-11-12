@@ -111,6 +111,7 @@ class Ctx:
     feeds: list = field(default_factory=list)
     unifi: dict = field(default_factory=dict)
     incomplete: bool = False
+    offline: bool = False  # audited from a saved config.xml, no live firewall
 
     def get(self, path: str, default: str | None = None) -> str | None:
         el = self.root.find(path)
@@ -1682,7 +1683,8 @@ def build(catalog, ctx):
         try:
             r = fn(ctx) if fn else Result("SKIP", "No implementation yet")
         except MissingData as e:
-            r = Result("WARN", f"Not checked: the firewall did not return '{e}' (remote run incomplete)")
+            r = (Result("SKIP", "Needs a live firewall; not checked in a config-file audit") if ctx.offline
+                 else Result("WARN", f"Not checked: the firewall did not return '{e}' (remote run incomplete)"))
         except Exception as e:  # noqa: BLE001 one broken check must not stop the audit
             r = Result("SKIP", f"Check error: {type(e).__name__}: {e}")
         unverified = "unverified" in c.get("verified_on", [])
@@ -1699,6 +1701,8 @@ def markdown(results, ctx) -> str:
     out = [f"# pfSense audit: {host.rstrip('.')}", "",
            f"pfSense {ctx.version} · {datetime.now().strftime('%Y-%m-%d %H:%M')} · pfaudit {VERSION}", "",
            " · ".join(f"{ICON[k]} {counts[k]} {k}" for k in ORDER), ""]
+    if ctx.offline:
+        out += ["> [!NOTE]", "> Audited from a saved config.xml. Checks that need the live firewall (services, sensors, disks, logs) are listed as not checked.", ""]
     if getattr(ctx, "incomplete", False):
         out += ["> [!WARNING]", "> The remote run did not finish, so some data is missing. Checks that needed it report WARN; run the audit again.", ""]
     if ctx.unifi:
@@ -1721,7 +1725,9 @@ def markdown(results, ctx) -> str:
 
 def main():
     ap = argparse.ArgumentParser(description="Read-only pfSense audit")
-    ap.add_argument("host")
+    ap.add_argument("host", nargs="?", help="Firewall address for SSH (omit with --config-file)")
+    ap.add_argument("--config-file", metavar="PATH", help="Audit a saved config.xml (Diagnostics > Backup & Restore) instead of a live firewall; "
+                    "checks that need the live box report SKIP")
     ap.add_argument("--user", default="admin")
     ap.add_argument("--port", type=int, default=22)
     ap.add_argument("--identity", help="SSH private key")
@@ -1742,11 +1748,21 @@ def main():
     args = ap.parse_args()
     if args.unifi_insecure and args.unifi_ca:
         ap.error("--unifi-insecure and --unifi-ca cannot be combined")
+    if bool(args.host) == bool(args.config_file):
+        ap.error("give either a firewall host or --config-file, not both")
+    if args.config_file and (args.dhcp_scan or args.updates):
+        ap.error("--dhcp-scan and --updates need a live firewall")
 
     catalog = tomllib.loads((HERE / "checks.toml").read_text())["checks"]
-    sections = split_sections(run_remote(args, REMOTE_SCRIPT))
-    missing = sorted(REMOTE_SECTIONS - set(sections) - {"config"})
-    incomplete = "end" not in sections or bool(missing)
+    if args.config_file:
+        cfg = Path(args.config_file)
+        if not cfg.is_file() or cfg.stat().st_size > 50_000_000:
+            sys.exit(f"Not a readable config file: {cfg}")
+        sections = {"config": cfg.read_text(encoding="utf-8", errors="replace")}
+    else:
+        sections = split_sections(run_remote(args, REMOTE_SCRIPT))
+    missing = [] if args.config_file else sorted(REMOTE_SECTIONS - set(sections) - {"config"})
+    incomplete = not args.config_file and ("end" not in sections or bool(missing))
     if incomplete:
         print("warning: the remote run did not finish" + (f"; missing: {', '.join(missing)}" if missing else "")
               + ". Checks that need missing data report WARN.", file=sys.stderr)
@@ -1754,7 +1770,7 @@ def main():
         root = ET.fromstring(sections.pop("config"))
     except (KeyError, ET.ParseError) as e:
         sys.exit(f"Could not read config.xml: {e}")
-    ctx = Ctx(args.host, sections, root, args)
+    ctx = Ctx(args.host or "config-file", sections, root, args, offline=bool(args.config_file))
     ctx.incomplete = incomplete
     if args.updates:
         ctx.sections.update(split_sections(run_remote(args, UPDATES_SCRIPT)))

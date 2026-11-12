@@ -43,6 +43,7 @@ git clone https://github.com/tatsuikeda/pfsense-audit-skill
 cd pfsense-audit-skill
 python3 pfaudit.py 192.0.2.1                         # your firewall's address; SSH key auth as admin
 python3 pfaudit.py 192.0.2.1 --external --feeds      # add outside-in probes and feed health
+python3 pfaudit.py --config-file config-backup.xml   # no live box: audit a saved config.xml
 ```
 
 | Flag | What it adds |
@@ -51,6 +52,7 @@ python3 pfaudit.py 192.0.2.1 --external --feeds      # add outside-in probes and
 | `--feeds` | Tests every pfBlockerNG feed URL for dead or empty lists |
 | `--updates` | Asks the firewall to check for pfSense updates |
 | `--dhcp-scan` | Listens 45 seconds on the LAN for rogue DHCP servers |
+| `--config-file PATH` | Audits a saved `config.xml` (Diagnostics > Backup & Restore) with no SSH. Config-only checks run; checks that need the live box show as not checked |
 | `--unifi URL` | Reads a UniFi OS console (read-only GETs) for the UniFi checks, e.g. `--unifi https://unifi.example.com` |
 | `--unifi-key-env NAME` | Environment variable holding the UniFi API key (default `UNIFI_API_KEY`). The key itself is never a flag |
 | `--unifi-site NAME` | UniFi site short name, default `default` |
@@ -185,7 +187,8 @@ flowchart LR
 - [x] Claude Code skill (`SKILL.md`)
 - [x] First live run on a production CE 2.9.0 firewall: core checks, `--feeds` and `--updates`, with fixes for what it found
 - [x] Before and after routine for changes and upgrades (boot environment, ACB copy, re-audit)
-- [ ] `--dhcp-scan` and `--external` run live (need a machine on the LAN and one outside it)
+- [x] `--dhcp-scan` run live on CE 2.9.0
+- [ ] `--external` run live (needs a machine outside the network)
 - [ ] Monthly self-update workflow (branch + pull request)
 - [ ] Validation on pfSense 26.10
 - [ ] Opt-in fixes

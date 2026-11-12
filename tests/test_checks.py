@@ -964,3 +964,17 @@ class RedditReviewTest(unittest.TestCase):
 
     def test_track6_with_media_on_tracked_wan_warns(self):
         self.assertEqual(run("HW-007", self._track6("wan")).status, "WARN")
+
+
+class ConfigFileModeTest(unittest.TestCase):
+    def test_offline_skips_live_checks_and_runs_config_checks(self):
+        ctx = pa.Ctx("config-file", {}, ET.fromstring((FIXTURES / "config_good.xml").read_bytes()), make_args(), offline=True)
+        results = {r["id"]: r for r in pa.build(CATALOG, ctx)}
+        self.assertEqual(results["HW-004"]["status"], "SKIP")          # needs zpool on the box
+        self.assertIn("live firewall", results["HW-004"]["detail"])
+        self.assertEqual(results["ACCESS-001"]["status"], "PASS")      # config only
+        self.assertNotIn("WARN", {r["status"] for r in results.values() if "did not return" in r["detail"]})
+
+    def test_offline_banner(self):
+        ctx = pa.Ctx("config-file", {}, ET.fromstring((FIXTURES / "config_good.xml").read_bytes()), make_args(), offline=True)
+        self.assertIn("saved config.xml", pa.markdown(pa.build(CATALOG, ctx), ctx))
