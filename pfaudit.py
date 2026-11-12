@@ -101,6 +101,50 @@ class Result:
     detail: str
 
 
+# Text from the firewall or the UniFi controller (rule descriptions, alias, device
+# and network names) is written by whoever administers those systems and ends up in
+# a report that a person, or the skill's agent, reads and acts on. Strip what can
+# hide or reorder text, keep it on one line, bound its length, and quote it.
+# Characters kept: letters, marks, numbers, punctuation, symbols and ordinary
+# spaces. Dropped: every control, format, private use, surrogate and unassigned
+# code point (categories C*), line and paragraph separators, and the code points
+# that are visible-looking letters or marks but render as nothing.
+_INVISIBLE_EXTRA = frozenset(
+    [0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180E, 0x2800, 0x3164, 0xFFA0]
+    + list(range(0x180B, 0x1810)) + list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0)))
+
+
+def _visible(ch: str) -> bool:
+    import unicodedata
+    if ch in " \t\n\r":
+        return True  # whitespace is collapsed afterwards
+    cat = unicodedata.category(ch)
+    return not (cat[0] == "C" or cat in ("Zl", "Zp") or ord(ch) in _INVISIBLE_EXTRA)
+
+
+def clean(text: str, limit: int = 600) -> str:
+    """One line of visible text: anything invisible or a control removed, whitespace collapsed, length capped."""
+    t = " ".join("".join(ch if _visible(ch) else "" for ch in str(text)).split())
+    return t if len(t) <= limit else t[: limit - 3] + "..."
+
+
+def val(text, limit: int = 60) -> str:
+    """A value taken from the firewall or controller, quoted so it reads as data."""
+    return '"' + clean(text, limit).replace('"', "'") + '"'
+
+
+_MD_ACTIVE = re.compile(r"([\\`*_\[\]<>|~&@#])")  # links, code, HTML, entities, emphasis, cells, mentions, refs
+
+
+def md_escape(text: str) -> str:
+    """Markdown-escape text so it cannot become a link, heading, HTML, entity, mention, reference or code.
+    Bare URLs and e-mail addresses are broken up too, because GitHub-flavoured Markdown links them on its own."""
+    t = _MD_ACTIVE.sub(r"\\\1", text)
+    t = re.sub(r"(?i)\b(https?|ftp)://", lambda m: m.group(1) + "\\://", t)
+    return re.sub(r"(?i)\bwww\.", "www\\.", t)
+
+
+
 @dataclass
 class Ctx:
     host: str
@@ -140,13 +184,54 @@ class Ctx:
         return self.version.startswith("2.9")
 
 
+# --ssh-opt is an allow list, not a deny list: ssh accepts leading whitespace, tabs,
+# quotes and '=' or a space between key and value, and many options load local code
+# or run commands, so filtering bad spellings cannot be complete (/sec-audit after run,
+# 2026-11-12). Only these keys, only as Key=Value, and only plain values.
+_SSH_OPT_ALLOWED = {
+    # A known hosts file is allowed because StrictHostKeyChecking is always yes: a
+    # file without this host's key stops the run instead of trusting a new key.
+    # ProxyJump is not allowed: the jump hop is a separate ssh that ignores these
+    # options (and sshpass would answer its password prompt). HostKeyAlias and
+    # StrictHostKeyChecking are not allowed: both can make a host look new.
+    "userknownhostsfile": None, "port": r"\d{1,5}",
+    "connecttimeout": r"\d{1,4}", "serveraliveinterval": r"\d{1,4}", "serveralivecountmax": r"\d{1,3}",
+    "identitiesonly": r"yes|no",
+}
+_SSH_OPT_SYNTAX = re.compile(r"([A-Za-z]+)=([A-Za-z0-9._~/@%+,:-]{1,200})")
+
+
+def ssh_opt_problem(opt: str) -> str | None:
+    """Why an --ssh-opt value is refused, or None when it is on the allow list."""
+    m = _SSH_OPT_SYNTAX.fullmatch(opt)
+    if not m:
+        return "write it as Key=Value with no spaces, quotes or tabs"
+    key, value = m.group(1).lower(), m.group(2)
+    if key not in _SSH_OPT_ALLOWED:
+        return f"{m.group(1)} is not on the allow list ({', '.join(sorted(_SSH_OPT_ALLOWED))})"
+    if value.startswith("-"):
+        return "the value must not start with '-'"
+    pattern = _SSH_OPT_ALLOWED[key]
+    if pattern and not re.fullmatch(pattern, value, re.I):
+        return f"{m.group(1)}={value} is not allowed (host keys must stay checked)"
+    if key == "userknownhostsfile" and value.lower() in ("/dev/null", "none"):
+        return "UserKnownHostsFile must name a real file (host keys must stay checked)"
+    return None
+
+
 def run_remote(args: argparse.Namespace, script: str) -> str:
-    cmd = ["ssh", "-o", "BatchMode=" + ("no" if args.password_env else "yes"), "-o", "ConnectTimeout=10", "-p", str(args.port)]
+    # ssh keeps the first value it sees for an option, and command-line options come
+    # before ~/.ssh/config, so StrictHostKeyChecking=yes goes first and no config file
+    # or --ssh-opt can relax it: an unknown or changed host key stops the run. A new
+    # firewall's key is added once, after the user confirms its fingerprint (SKILL.md).
+    cmd = ["ssh", "-o", "StrictHostKeyChecking=yes"]
     for opt in args.ssh_opt or []:
         cmd += ["-o", opt]
+    cmd += ["-o", "BatchMode=" + ("no" if args.password_env else "yes"), "-o", "ConnectTimeout=10", "-p", str(args.port)]
     if args.identity:
         cmd += ["-i", args.identity]
-    cmd += [f"{args.user}@{args.host}", "sh -s"]
+    # "--" ends ssh's options, so a user or host value can never be read as one.
+    cmd += ["--", f"{args.user}@{args.host}", "sh -s"]
     env = os.environ.copy()
     if args.password_env:
         if not shutil.which("sshpass"):
@@ -155,7 +240,7 @@ def run_remote(args: argparse.Namespace, script: str) -> str:
         cmd = ["sshpass", "-e"] + cmd
     proc = subprocess.run(cmd, input=script, capture_output=True, text=True, env=env, timeout=400)
     if proc.returncode != 0 and "@@" not in proc.stdout:
-        sys.exit(f"SSH failed ({proc.returncode}): {proc.stderr.strip()[:300]}")
+        sys.exit(f"SSH failed ({proc.returncode}): {clean(proc.stderr, 300)}")
     return proc.stdout
 
 
@@ -203,12 +288,15 @@ def is_any(rule: ET.Element, side: str) -> bool:
 @check("ACCESS-001")
 def _(ctx):
     p = ctx.get("system/webgui/protocol", "https")
-    return Result("PASS", "HTTPS") if p == "https" else Result("FAIL", f"WebGUI protocol is {p}")
+    return Result("PASS", "HTTPS") if p == "https" else Result("FAIL", f"WebGUI protocol is {val(p, 20)}")
 
 
 @check("ACCESS-002")
 def _(ctx):
-    t = int(ctx.get("system/webgui/session_timeout") or 240)
+    raw = ctx.get("system/webgui/session_timeout") or "240"
+    if not raw.isdigit():
+        return Result("WARN", f"Session timeout is not a number: {val(raw, 20)}")
+    t = int(raw)
     if t == 0:
         return Result("FAIL", "Session timeout disabled (sessions never expire)")
     return Result("PASS", f"{t} minutes") if t <= 30 else Result("WARN", f"{t} minutes (default 240); 15 to 30 recommended")
@@ -282,7 +370,7 @@ def _(ctx):
             admins = [u.findtext("name") for u in users if u.findtext("uid") in uids]
     if "admin" in names and len(admins) <= 1:
         return Result("WARN", "Only the shared 'admin' account has admin rights; create named admin accounts")
-    return Result("PASS", f"admin accounts: {', '.join(sorted(set(admins) | {'admin'} & set(names))) or 'none'}")
+    return Result("PASS", f"admin accounts: {', '.join(val(n) for n in sorted(set(admins) | {'admin'} & set(names))) or 'none'}")
 
 
 @check("ACCESS-006")
@@ -331,7 +419,7 @@ def _(ctx):
             continue
         dst = r.find("destination")
         port = dst.findtext("port") if dst is not None else ""
-        rows.append(f"{r.findtext('protocol') or 'any'}/{port or 'any'} from {'any' if is_any(r, 'source') else 'restricted'} ({r.findtext('descr') or 'no description'})")
+        rows.append(f"{r.findtext('protocol') or 'any'}/{port or 'any'} from {'any' if is_any(r, 'source') else 'restricted'} ({val(r.findtext('descr')) if r.findtext('descr') else 'no description'})")
     nat = len(ctx.all("nat/rule"))
     detail = "; ".join(rows) if rows else "no WAN pass rules"
     return Result("INFO", f"{detail}; port forwards: {nat}")
@@ -339,7 +427,7 @@ def _(ctx):
 
 @check("PERIM-003")
 def _(ctx):
-    return Result("INFO", f"State policy: {ctx.get('system/statepolicy') or 'if-bound (default)'}")
+    return Result("INFO", f"State policy: {val(ctx.get('system/statepolicy')) if ctx.get('system/statepolicy') else 'if-bound (default)'}")
 
 
 @check("PERIM-004")
@@ -411,7 +499,7 @@ def _(ctx):
         return Result("SKIP", "No OpenVPN servers")
     issues = []
     for s in srv:
-        name = s.findtext("description") or s.findtext("vpnid")
+        name = val(s.findtext("description") or s.findtext("vpnid") or "server")
         if (s.findtext("tls_type") or "") != "crypt":
             issues.append(f"{name}: tls_type {s.findtext('tls_type') or 'none'} (use crypt)")
         if (s.findtext("digest") or "").upper() in ("SHA1", "MD5"):
@@ -430,7 +518,7 @@ def _(ctx):
     srv = ovpn_servers(ctx)
     if not srv:
         return Result("SKIP", "No OpenVPN servers")
-    miss = [s.findtext("description") or "server" for s in srv if not (s.findtext("crlref") or "")]
+    miss = [val(s.findtext("description") or "server") for s in srv if not (s.findtext("crlref") or "")]
     return Result("FAIL", f"No CRL on: {', '.join(miss)}") if miss else Result("PASS", "CRL attached")
 
 
@@ -439,7 +527,7 @@ def _(ctx):
     srv = ovpn_servers(ctx)
     if not srv:
         return Result("SKIP", "No OpenVPN servers")
-    bad = [s.findtext("description") or "server" for s in srv if (s.findtext("strictusercn") or "") != "yes"]
+    bad = [val(s.findtext("description") or "server") for s in srv if (s.findtext("strictusercn") or "") != "yes"]
     return Result("WARN", f"Strict user/CN off: {', '.join(bad)}") if bad else Result("PASS", "Strict user/CN on")
 
 
@@ -526,7 +614,7 @@ def _(ctx):
             continue
         why = wide_destination(ctx, r)
         if why:
-            label = r.findtext("descr") or r.findtext("tracker") or "rule"
+            label = val(r.findtext("descr")) if r.findtext("descr") else f"rule {clean(r.findtext('tracker') or '?', 20)}"
             port = (r.find("destination").findtext("port") if r.find("destination") is not None else "") or ""
             fam = {"inet6": " (IPv6 only)", "inet46": " (IPv4 and IPv6)"}.get(r.findtext("ipprotocol") or "", "")
             wide.append(f"{label}: {why}" + (f", port {port}" if port else ", all ports") + fam
@@ -572,7 +660,7 @@ def _(ctx):
         if days < 30:
             issues.append(f"{label} expires in {days} days")
     used = {ctx.get("system/webgui/ssl-certref")} | {s.findtext("certref") for s in ovpn_servers(ctx)}
-    noauto = [c.findtext("descr") or "cert" for c in ctx.all("cert") if c.findtext("refid") in used and (c.findtext("autorenew") or "") != "enabled"]
+    noauto = [val(c.findtext("descr") or "cert") for c in ctx.all("cert") if c.findtext("refid") in used and (c.findtext("autorenew") or "") != "enabled"]
     if issues:
         return Result("FAIL", "; ".join(issues))
     if noauto:
@@ -602,7 +690,7 @@ def _(ctx):
         return Result("WARN", "Forwarding without TLS")
     if not ctx.get("system/dns1host"):
         return Result("WARN", "TLS forwarding without a verified hostname (system/dns1host)")
-    return Result("PASS", f"TLS forwarding to {ctx.get('system/dns1host')}")
+    return Result("PASS", f"TLS forwarding to {val(ctx.get('system/dns1host'))}")
 
 
 @check("DNS-003")
@@ -698,7 +786,7 @@ def _(ctx):
 def _(ctx):
     if not ctx.args.feeds:
         return Result("SKIP", "Run with --feeds to test feed URLs")
-    bad = [f"{u} ({why})" for u, why in ctx.feeds if why]
+    bad = [f"{val(u, 120)} ({clean(why, 80)})" for u, why in ctx.feeds if why]
     return Result("WARN", f"{len(bad)} of {len(ctx.feeds)} feeds look dead or stale: " + "; ".join(bad)) if bad else Result("PASS", f"All {len(ctx.feeds)} feeds reachable")
 
 
@@ -783,7 +871,7 @@ def _(ctx):
     for g in ctx.all("gateways/gateway_item"):
         gw, mon = g.findtext("gateway") or "", g.findtext("monitor") or ""
         if gw and gw != "dynamic" and (not mon or mon == gw):
-            bad.append(g.findtext("name") or gw)
+            bad.append(val(g.findtext("name") or gw))
     return Result("WARN", f"Gateway monitor pings the gateway itself: {', '.join(bad)} (lesson 3)") if bad else Result("PASS", "Gateway monitors use an internet target")
 
 
@@ -810,7 +898,7 @@ def _(ctx):
 
 @check("ACCESS-008")
 def _(ctx):
-    legacy = [u.findtext("name") or "?" for u in ctx.all("system/user")
+    legacy = [val(u.findtext("name") or "?") for u in ctx.all("system/user")
               if u.find("disabled") is None and ((u.findtext("md5-hash") or "").strip() or (u.findtext("password") or "").strip())]
     if legacy:
         return Result("WARN", f"Legacy password hashes (unsalted MD5 or old crypt) on: {', '.join(legacy)}; reset these passwords")
@@ -845,7 +933,7 @@ def _(ctx):
     fw = _firewall_addrs(ctx)
     issues = []
     for s in srv:
-        name = s.findtext("description") or s.findtext("vpnid") or "server"
+        name = val(s.findtext("description") or s.findtext("vpnid") or "server")
         vid = s.findtext("vpnid") or ""
         if vid in pushed:
             dns = pushed[vid]
@@ -882,7 +970,7 @@ def _(ctx):
         return Result("SKIP", "No OpenVPN servers")
     warn, info = [], []
     for s in srv:
-        name = s.findtext("description") or s.findtext("vpnid") or "server"
+        name = val(s.findtext("description") or s.findtext("vpnid") or "server")
         comp = (s.findtext("allow_compression") or "").strip()
         if comp == "yes":
             warn.append(f"{name}: compression allowed (VORACLE risk; set Allow Compression to Refuse)")
@@ -1052,10 +1140,10 @@ def _(ctx):
     # One "<name> <status flags>" line per UPS; every UPS must report OL.
     rows = [line.split()[1:] for line in st.splitlines() if line.strip()]
     if not rows or any("OL" not in flags for flags in rows):
-        return Result("FAIL", f"UPS status: {st or 'no response'}")
+        return Result("FAIL", f"UPS status: {val(st, 120) if st else 'no response'}")
     if ctx.get("installedpackages/nut/config/email") != "yes":
         return Result("WARN", "UPS online but power-event emails are off (lesson 4)")
-    return Result("PASS", f"UPS online, alerts on ({st})")
+    return Result("PASS", f"UPS online, alerts on ({val(st, 120)})")
 
 
 IPV4 = re.compile(r"\d+\.\d+\.\d+\.\d+")
@@ -1094,10 +1182,10 @@ def fw_ip_for_vlan(ctx, vlan: int | None) -> str | None:
 def _unifi(ctx, part: str | None = None):
     """(data, None) when UniFi data is usable, else (None, SKIP result)."""
     if not getattr(ctx.args, "unifi", None):
-        return None, Result("SKIP", "Run with --unifi https://<controller> and --unifi-key-env to read the UniFi controller")
+        return None, Result("SKIP", "Run with --unifi and the console address, plus --unifi-key-env, to read the UniFi controller")
     u = ctx.unifi or {}
     if u.get("fatal"):
-        return None, Result("SKIP", f"UniFi: {u['fatal']}")
+        return None, Result("SKIP", f"UniFi: {val(u['fatal'], 200)}")
     if part and not u.get(part):
         why = "; ".join(u.get("errors", [])) or "no data returned"
         return None, Result("SKIP", f"Needs the UniFi {part} API, which was not available ({why[:200]})")
@@ -1152,13 +1240,13 @@ def _(ctx):
             continue
         want = fw_ip_for_vlan(ctx, n["vlan"])
         if want is None:
-            unmapped.append(n["name"])
+            unmapped.append(val(n["name"]))
         elif not n["guard"]:
-            off.append(f"{n['name']} (VLAN {n['vlan'] or 'untagged'})")
+            off.append(f"{val(n['name'])} (VLAN {clean(str(n['vlan'] or 'untagged'), 20)})")
         elif want not in n["trusted"]:
-            wrong.append(f"{n['name']} trusts {', '.join(n['trusted']) or 'nothing'}, firewall is {want}")
+            wrong.append(f"{val(n['name'])} trusts {', '.join(val(t, 45) for t in n['trusted']) or 'nothing'}, firewall is {want}")
         else:
-            ok.append(n["name"])
+            ok.append(val(n["name"]))
     note = f" (source: {src}" + (f"; no firewall interface for: {', '.join(unmapped)}" if unmapped else "") + ")"
     if off:
         return Result("FAIL", "DHCP Guarding off on: " + "; ".join(off) + note)
@@ -1205,8 +1293,9 @@ def _(ctx):
     else:
         return Result("SKIP", "No UniFi Wi-Fi data: " + "; ".join(u.get("errors", []))[:200])
     for w in wlans:
-        name = w["name"]
-        if w["open"] and name.lower() in intended:
+        raw = w["name"]
+        name = val(raw)
+        if w["open"] and raw.lower() in intended:
             infos.append(f"{name} is open by intent")
         elif w["open"] and w["guest"]:
             fails.append(f"guest SSID {name} is open (no password)")
@@ -1214,9 +1303,9 @@ def _(ctx):
             warns.append(f"SSID {name} is open")
         if w["guest"] and not w["iso"]:
             warns.append(f"guest SSID {name} has client isolation off")
-        if not w["guest"] and legacy is not None and GUEST_NAME.search(name):
+        if not w["guest"] and legacy is not None and GUEST_NAME.search(raw):
             warns.append(f"{name} looks like a guest SSID but is not marked guest")
-    guests = [w["name"] for w in wlans if w["guest"]]
+    guests = [val(w["name"]) for w in wlans if w["guest"]]
     note = f" (source: {src})"
     if fails:
         return Result("FAIL", "; ".join(fails + warns) + " (lesson 19)" + note)
@@ -1280,13 +1369,13 @@ def _(ctx):
         for d in legacy:
             if d.get("adopted") is False:
                 continue
-            name = d.get("name") or d.get("model") or "device"
+            name = val(d.get("name") or d.get("model") or "device")
             host = urlsplit(str(d.get("inform_url") or "")).hostname or ""
             ip = str(d.get("inform_ip") or "")
             if not host and not ip:
                 bad.append(f"{name} reports no inform address")
             elif not ({host, ip} & expect):
-                wrong.append(f"{name} informs to {host or ip}")
+                wrong.append(f"{name} informs to {val(host or ip, 80)}")
             else:
                 ok += 1
             st = d.get("state")
@@ -1298,7 +1387,7 @@ def _(ctx):
     devs = (u.get("integration") or {}).get("devices")
     if devs is None:
         return Result("SKIP", "No UniFi device data: " + "; ".join(u.get("errors", []))[:200])
-    down = [f"{d.get('name') or d.get('model') or 'device'} {d.get('state')}" for d in devs if d.get("state") not in ("ONLINE", None)]
+    down = [f"{val(d.get('name') or d.get('model') or 'device')} {clean(str(d.get('state')), 30)}" for d in devs if d.get("state") not in ("ONLINE", None)]
     if down:
         return Result("WARN", f"Devices not online: {'; '.join(down)}; the inform host needs the legacy API")
     return Result("INFO", f"{len(devs)} devices online; the inform host is only exposed by the legacy API, so it was not compared")
@@ -1379,20 +1468,32 @@ def external_tests(ctx: Ctx) -> dict:
     return {"ip": ip, "tcp": tcp, "udp": udp}
 
 
+# IPv6 ranges that carry or translate an IPv4 address (NAT64, IPv4-compatible,
+# IPv4-mapped, 6to4, Teredo). Python counts some of them as global, but each can
+# lead to a private IPv4 address, so a feed URL there is refused.
+_V6_TRANSITION = tuple(ipaddress.ip_network(n) for n in (
+    "64:ff9b::/96", "64:ff9b:1::/48", "::/96", "::ffff:0:0/96", "::ffff:0:0:0/96", "2002::/16", "2001::/32"))
+
+
+def is_public_ip(ip) -> bool:
+    if not ip.is_global or ip.is_multicast:
+        return False
+    return not (ip.version == 6 and any(ip in n for n in _V6_TRANSITION))
+
+
 def public_url(url: str) -> bool:
     """True only for http(s) URLs whose host resolves solely to public addresses."""
     import ipaddress
     from urllib.parse import urlsplit
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        return False
-    try:
+    try:  # a malformed port or host label raises ValueError or UnicodeError: not public
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return False
         infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
-    except OSError:
+    except (OSError, ValueError, UnicodeError):
         return False
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global or ip.is_multicast:
+        if not is_public_ip(ipaddress.ip_address(info[4][0])):
             return False
     return True
 
@@ -1400,17 +1501,20 @@ def public_url(url: str) -> bool:
 def safe_url(url: str) -> str:
     """URL for display: no credentials, query string or fragment."""
     from urllib.parse import urlsplit, urlunsplit
-    p = urlsplit(url)
-    host = p.hostname or ""
-    if p.port:
-        host += f":{p.port}"
+    try:
+        p = urlsplit(url)
+        host = p.hostname or ""
+        if p.port:
+            host += f":{p.port}"
+    except (ValueError, UnicodeError):
+        return "(unparseable URL)"
     return urlunsplit((p.scheme, host, p.path, "", "")) + ("?..." if p.query else "")
 
 
 def _require_public_peer(sock) -> None:
     import ipaddress
     peer = ipaddress.ip_address(sock.getpeername()[0])
-    if not peer.is_global or peer.is_multicast:
+    if not is_public_ip(peer):
         sock.close()
         raise urllib.error.URLError(f"connected to non-public address {peer}; blocked")
 
@@ -1599,7 +1703,7 @@ class UnifiClient:
         """A legacy API call; unwraps {meta: {rc}, data: [...]}."""
         d = self.get(path)
         if isinstance(d, dict) and isinstance(d.get("meta"), dict) and d["meta"].get("rc") not in (None, "ok"):
-            raise UnifiError(f"{path}: {d['meta'].get('msg') or d['meta'].get('rc')}")
+            raise UnifiError(f"{path}: {val(d['meta'].get('msg') or d['meta'].get('rc'), 80)}")
         data = d.get("data") if isinstance(d, dict) else d
         return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
@@ -1687,6 +1791,7 @@ def build(catalog, ctx):
                  else Result("WARN", f"Not checked: the firewall did not return '{e}' (remote run incomplete)"))
         except Exception as e:  # noqa: BLE001 one broken check must not stop the audit
             r = Result("SKIP", f"Check error: {type(e).__name__}: {e}")
+        r = Result(r.status, clean(r.detail))
         unverified = "unverified" in c.get("verified_on", [])
         if unverified and r.status == "FAIL":
             r = Result("WARN", r.detail + " (check not yet verified on a live system)")
@@ -1698,15 +1803,15 @@ def build(catalog, ctx):
 def markdown(results, ctx) -> str:
     counts = {k: sum(1 for r in results if r["status"] == k) for k in ORDER}
     host = ctx.get("system/hostname", "?") + "." + (ctx.get("system/domain") or "")
-    out = [f"# pfSense audit: {host.rstrip('.')}", "",
-           f"pfSense {ctx.version} · {datetime.now().strftime('%Y-%m-%d %H:%M')} · pfaudit {VERSION}", "",
+    out = [f"# pfSense audit: {md_escape(clean(host.rstrip('.'), 120))}", "",
+           f"pfSense {md_escape(clean(ctx.version, 60))} · {datetime.now().strftime('%Y-%m-%d %H:%M')} · pfaudit {VERSION}", "",
            " · ".join(f"{ICON[k]} {counts[k]} {k}" for k in ORDER), ""]
     if ctx.offline:
         out += ["> [!NOTE]", "> Audited from a saved config.xml. Checks that need the live firewall (services, sensors, disks, logs) are listed as not checked.", ""]
     if getattr(ctx, "incomplete", False):
         out += ["> [!WARNING]", "> The remote run did not finish, so some data is missing. Checks that needed it report WARN; run the audit again.", ""]
     if ctx.unifi:
-        out += [f"UniFi controller {ctx.unifi.get('url', '?')} · Network {ctx.unifi.get('version') or 'unknown'} · TLS {ctx.unifi.get('tls')}", ""]
+        out += [f"UniFi controller {md_escape(clean(ctx.unifi.get('url', '?'), 120))} · Network {md_escape(clean(ctx.unifi.get('version') or 'unknown', 40))} · TLS {ctx.unifi.get('tls')}", ""]
         if ctx.unifi.get("tls") == "insecure":
             out += ["> [!WARNING]", "> UniFi TLS verification was disabled with `--unifi-insecure`. The controller's identity was not checked, so these UniFi results and the API key were exposed to anyone able to intercept the connection.", ""]
     for status, title in (("FAIL", "Fix now"), ("WARN", "Fix soon"), ("INFO", "For your information"), ("PASS", "Good"), ("SKIP", "Not checked")):
@@ -1716,7 +1821,7 @@ def markdown(results, ctx) -> str:
         out += [f"## {ICON[status]} {title}", ""]
         for r in rows:
             out.append(f"- **{r['title']}** `{r['id']}` · {r['risk']} risk  ")
-            out.append(f"  {r['detail']}")
+            out.append(f"  {md_escape(r['detail'])}")
             if status in ("FAIL", "WARN") and r.get("fix"):
                 out.append(f"  *Fix:* {r['fix']}" + (f" *Impact:* {r['impact']}" if r.get("impact") else ""))
         out.append("")
@@ -1750,6 +1855,13 @@ def main():
         ap.error("--unifi-insecure and --unifi-ca cannot be combined")
     if bool(args.host) == bool(args.config_file):
         ap.error("give either a firewall host or --config-file, not both")
+    for name, v in (("host", args.host or ""), ("--user", args.user or "")):
+        if v.startswith("-") or any(c.isspace() or c == "@" for c in v):
+            ap.error(f"{name} must not start with '-' or contain spaces or '@'")
+    for opt in args.ssh_opt or []:
+        why = ssh_opt_problem(opt)
+        if why:
+            ap.error(f"--ssh-opt {opt!r} refused: {why}")
     if args.config_file and (args.dhcp_scan or args.updates):
         ap.error("--dhcp-scan and --updates need a live firewall")
     if args.config_file and args.external and not args.wan_ip:
@@ -1799,9 +1911,10 @@ def main():
     results = build(catalog, ctx)
     del root  # the config never leaves memory and is not kept
     if args.json:
-        doc = {"version": ctx.version, "pfaudit": VERSION, "complete": not incomplete, "results": results}
+        doc = {"version": clean(ctx.version, 60), "pfaudit": VERSION, "complete": not incomplete, "results": results}
         if ctx.unifi:  # summary only; raw controller data is never output
-            doc["unifi"] = {k: ctx.unifi.get(k) for k in ("url", "version", "tls", "errors", "fatal")}
+            doc["unifi"] = {k: ([clean(e, 300) for e in v] if isinstance(v, list) else clean(v, 300) if isinstance(v, str) else v)
+                            for k in ("url", "version", "tls", "errors", "fatal") for v in [ctx.unifi.get(k)]}
         print(json.dumps(doc, indent=2, default=str))
     else:
         print(markdown(results, ctx))

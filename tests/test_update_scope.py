@@ -134,6 +134,30 @@ class LessonsChangesTest(unittest.TestCase):
 
 
 class ScanTextTest(unittest.TestCase):
+    def test_tag_characters_and_escapes_rejected(self):
+        # /sec-audit 2026-11-12: tag characters and their TOML escapes passed the gate.
+        bs = chr(92)
+        lines = [
+            "notes = " + chr(34) + "ok" + bs + "U000E0041" + bs + "U000E0042" + chr(34),  # TOML escape of a tag character
+            "plain text with a real tag " + chr(0xE0049) + " char",                          # literal tag character
+            "zero width &#x200B; entity",
+            "variation " + bs + "uFE0F selector",
+            "decimal &#8203; entity",
+        ]
+        errors = gate.scan_text("LESSONS.md", lines)
+        for n in range(1, len(lines) + 1):
+            self.assertTrue(any(f"(added line {n})" in e for e in errors), (n, errors))
+
+    def test_controls_and_private_use_rejected(self):
+        bs = chr(92)
+        lines = ["hidden " + chr(27) + "[8m text", "line" + chr(0x2028) + "sep", "private " + chr(0xE000), "escaped " + bs + "u001B[8m"]
+        errors = gate.scan_text("LESSONS.md", lines)
+        for n in range(1, len(lines) + 1):
+            self.assertTrue(any(f"(added line {n})" in e for e in errors), (n, errors))
+
+    def test_ordinary_escapes_allowed(self):
+        self.assertEqual([e for e in gate.scan_text("checks.toml", ['fix = "use \\u0041 here"', "caf\u00e9 &#233;"]) if "escaped" in e], [])
+
     def test_mentions_in_research_note(self):
         lines = ["Thanks @octocat and @some-org/team.", "Mail admin@example.com", "Use `@scoped/pkg` here",
                  "```", "@inside-fence", "```"]

@@ -38,6 +38,7 @@ import ipaddress
 import os
 import html
 import re
+import unicodedata
 import subprocess
 import sys
 import tomllib
@@ -64,8 +65,14 @@ BAD_CHARS = {
     "\u2014": "em dash", "\u2013": "en dash", "\u2012": "figure dash", "\u2015": "horizontal bar",
     **{chr(c): "invisible or bidi control U+%04X" % c for c in (
         *range(0x200B, 0x2010), *range(0x202A, 0x202F), *range(0x2060, 0x2065), *range(0x2066, 0x206A), 0xFEFF, 0x00AD,
+        0x034F, 0x061C, 0x115F, 0x1160, 0x180E, 0x3164, 0xFFA0, *range(0x180B, 0x1810), *range(0xFE00, 0xFE10),
+        *range(0xE0000, 0xE0080),   # Unicode tag characters: invisible, and read by models as text
+        *range(0xE0100, 0xE01F0),   # variation selectors supplement
     )},
 }
+# The same characters written as escapes, which TOML basic strings and some renderers
+# turn back into the real character: \uXXXX, \UXXXXXXXX, &#xXXXX; and &#NNNN;.
+ESCAPED_CHAR_RE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|&#[xX]([0-9A-Fa-f]{1,6});|&#([0-9]{1,7});")
 DOUBLE_HYPHEN_RE = re.compile(r"(?:^|\s)--(?:\s|$)")
 SECRET_RE = re.compile(
     r"(sk-ant-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[ousr]_[A-Za-z0-9]{20,}"
@@ -146,6 +153,16 @@ def scan_text(path: str, lines: list[str]) -> list[str]:
         for ch, name in BAD_CHARS.items():
             if ch in line:
                 errors.append(f"{where}: contains {name}")
+        for ch in set(line):
+            if ch not in BAD_CHARS and ch != "\t" and unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp"):
+                errors.append(f"{where}: contains control, format, private-use or unassigned character U+{ord(ch):04X}")
+        for m in ESCAPED_CHAR_RE.finditer(line):
+            hexv, hex8, ent_hex, ent_dec = m.groups()
+            code = int(hexv or hex8 or ent_hex, 16) if (hexv or hex8 or ent_hex) else int(ent_dec)
+            if code > 0x10FFFF:
+                errors.append(f"{where}: escape out of Unicode range ({m.group(0)})")
+            elif chr(code) in BAD_CHARS or unicodedata.category(chr(code))[0] == "C" or unicodedata.category(chr(code)) in ("Zl", "Zp"):
+                errors.append(f"{where}: escaped control, format or invisible character U+{code:04X} ({m.group(0)})")
         # A double hyphen inside a code span (a CLI flag such as `--feeds`) is fine.
         prose = re.sub(r"`[^`]*`", "", line)
         if DOUBLE_HYPHEN_RE.search(prose):

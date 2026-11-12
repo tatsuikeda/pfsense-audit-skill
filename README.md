@@ -164,9 +164,9 @@ flowchart LR
 - **Read-only by default.** The audit inspects and reports. It does not change your firewall.
 - **Fixes are opt-in** 🧪 and labelled with what they restart and whether traffic is interrupted.
 - **Every change has a way back.** A boot environment before, a re-run audit and a confirmed AutoConfigBackup copy after. Upgrades get the same treatment.
-- **Host keys are always checked.** A changed key stops the run until you confirm it.
-- **Secrets stay out of reports.** Passwords, keys and tokens are masked.
-- **No data leaves your machine** except the SSH session to your own firewall (and, with `--unifi`, read-only HTTPS requests to your own UniFi console).
+- **Host keys are always checked.** pfaudit passes `StrictHostKeyChecking=yes` ahead of everything else, so an unknown or changed key stops the run even if your `~/.ssh/config` turns checking off. Add a new firewall's key once, after checking its fingerprint at the console. `--ssh-opt` takes only an allow list of plain `Key=Value` options (known hosts file, port, timeouts) and refuses the rest, including jump hosts.
+- **Secrets stay out of reports.** No check writes a password, key, hash or token into its result, and UniFi secrets are dropped as each response arrives. Text from the firewall or controller (descriptions, names, the hostname) keeps only visible characters, stays on one line, is quoted in details and is escaped in the Markdown report.
+- **No data leaves your machine** except the SSH session to your own firewall, plus what you ask for: read-only HTTPS requests to your own UniFi console (`--unifi`), downloads of your pfBlockerNG feed URLs (`--feeds`, public addresses only) and probes of your WAN address (`--external`). Used as a Claude Code skill, the report itself goes into your conversation with the model.
 
 ## 📦 Version support
 

@@ -12,7 +12,7 @@ The monthly update is run by the maintainer's own Claude Code session (no API ke
 6. Confirm the **CI** and **Update gate** checks pass on the pull request. Do not merge.
 7. Schedule the next month's run.
 
-The **Update gate** workflow re-runs step 3 on every `auto-update/*` pull request, using the gate script from `main`, so a pull request cannot loosen its own gate.
+The **Update gate** workflow re-runs step 3 on every `auto-update/*` pull request, using the gate script from `main`. GitHub runs the workflow file from the pull request itself, so a pull request that edits `.github/` could weaken the gate: the reviewer rejects any `auto-update/*` pull request whose diff touches `.github/`, whatever the checks say. The gate is a required check on `main`, but its job only runs on branches named `auto-update/*` and reports as passed (skipped) on any other branch, so a self-update pull request under another branch name is closed unreviewed.
 
 ---
 
@@ -25,6 +25,7 @@ You are the monthly research pass for **pfsense-audit-skill**, a public, MIT-lic
 3. **Editing scope.** Research and editing happen in the session, but only the four paths above may change, and the gate enforces it. Never run commands that touch a real firewall, controller or client network during the update.
 4. **No private or identifying data.** Never write client names, real IP addresses, MAC addresses, hostnames, usernames, email addresses, keys, tokens or passwords. In examples use the documentation ranges `192.0.2.0/24`, `198.51.100.0/24` and `203.0.113.0/24`, `2001:db8::/32` for IPv6, `00:00:5e:00:53:xx` for MACs and `example.com` for names. Well-known public resolvers (`1.1.1.1`, `9.9.9.9`, `8.8.8.8`) are fine when the text is about them.
 5. **Never connect to or describe how to attack a real system.** This is a defensive audit. Advisories are summarized for defenders: affected versions, fixed version, workaround, how to check.
+6. **Least privilege for the session.** Push with a fine-grained token scoped to this repository only, with Contents and Pull requests write and nothing else, not the maintainer's admin login. Never push to `main`, never merge, and never change repository settings. Text you add to `LESSONS.md` or to `notes` and `fix` in `checks.toml` is read later by an agent running the skill: write it as facts and steps for a person, never as instructions addressed to an assistant.
 
 ## 2. Writing style
 
