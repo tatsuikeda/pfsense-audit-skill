@@ -133,6 +133,15 @@ def val(text, limit: int = 60) -> str:
     return '"' + clean(text, limit).replace('"', "'") + '"'
 
 
+def tok(text, default: str = "") -> str:
+    """A short config code (protocol, port, digest, mode) as written when it is a plain
+    token, quoted with val() when it is anything else."""
+    t = "" if text is None else str(text)
+    if not t:
+        return default
+    return t if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,39}", t) else val(t, 40)
+
+
 _MD_ACTIVE = re.compile(r"([\\`*_\[\]<>|~&@#])")  # links, code, HTML, entities, emphasis, cells, mentions, refs
 
 
@@ -419,7 +428,7 @@ def _(ctx):
             continue
         dst = r.find("destination")
         port = dst.findtext("port") if dst is not None else ""
-        rows.append(f"{r.findtext('protocol') or 'any'}/{port or 'any'} from {'any' if is_any(r, 'source') else 'restricted'} ({val(r.findtext('descr')) if r.findtext('descr') else 'no description'})")
+        rows.append(f"{tok(r.findtext('protocol'), 'any')}/{tok(port, 'any')} from {'any' if is_any(r, 'source') else 'restricted'} ({val(r.findtext('descr')) if r.findtext('descr') else 'no description'})")
     nat = len(ctx.all("nat/rule"))
     detail = "; ".join(rows) if rows else "no WAN pass rules"
     return Result("INFO", f"{detail}; port forwards: {nat}")
@@ -501,9 +510,9 @@ def _(ctx):
     for s in srv:
         name = val(s.findtext("description") or s.findtext("vpnid") or "server")
         if (s.findtext("tls_type") or "") != "crypt":
-            issues.append(f"{name}: tls_type {s.findtext('tls_type') or 'none'} (use crypt)")
+            issues.append(f"{name}: tls_type {tok(s.findtext('tls_type'), 'none')} (use crypt)")
         if (s.findtext("digest") or "").upper() in ("SHA1", "MD5"):
-            issues.append(f"{name}: digest {s.findtext('digest')}")
+            issues.append(f"{name}: digest {tok(s.findtext('digest'), 'none')}")
         ciphers = (s.findtext("data_ciphers") or "") + "," + (s.findtext("data_ciphers_fallback") or "")
         if "CBC" in ciphers.upper():
             issues.append(f"{name}: CBC cipher allowed")
@@ -617,7 +626,7 @@ def _(ctx):
             label = val(r.findtext("descr")) if r.findtext("descr") else f"rule {clean(r.findtext('tracker') or '?', 20)}"
             port = (r.find("destination").findtext("port") if r.find("destination") is not None else "") or ""
             fam = {"inet6": " (IPv6 only)", "inet46": " (IPv4 and IPv6)"}.get(r.findtext("ipprotocol") or "", "")
-            wide.append(f"{label}: {why}" + (f", port {port}" if port else ", all ports") + fam
+            wide.append(f"{label}: {why}" + (f", port {tok(port)}" if port else ", all ports") + fam
                         + (" (floating)" if r.find("floating") is not None else ""))
     if wide:
         return Result("WARN", "VPN users can reach whole networks: " + "; ".join(wide)[:300])
@@ -755,7 +764,7 @@ def _(ctx):
     if not pfb_installed(ctx):
         return Result("SKIP", "pfBlockerNG DNSBL not configured")
     m = ctx.get(f"{PFB}/dnsbl_mode")
-    return Result("PASS", "Python mode") if m == "dnsbl_python" else Result("WARN", f"DNSBL mode {m or 'unset'}; Python mode recommended")
+    return Result("PASS", "Python mode") if m == "dnsbl_python" else Result("WARN", f"DNSBL mode {tok(m, 'unset')}; Python mode recommended")
 
 
 @check("PFB-002")
@@ -1057,7 +1066,7 @@ def _(ctx):
 def _(ctx):
     cpu_has = (ctx.sec("aesni_cpu") or "0").strip() not in ("", "0")
     if "aesni" in ctx.sec("kldstat") or ctx.get("system/crypto_hardware"):
-        return Result("PASS", f"Crypto hardware: {ctx.get('system/crypto_hardware') or 'aesni module loaded'}")
+        return Result("PASS", f"Crypto hardware: {tok(ctx.get('system/crypto_hardware'), 'aesni module loaded')}")
     return Result("WARN", "CPU supports AES-NI but it is not enabled") if cpu_has else Result("INFO", "No AES-NI detected")
 
 
