@@ -95,7 +95,7 @@ What the skill handles for you:
 
 ## 🔍 What it checks
 
-**61 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
+**62 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
 
 | Area | Highlights |
 |---|---|
@@ -177,8 +177,8 @@ flowchart LR
 
 ## 🗺️ Roadmap
 
-- [x] `LESSONS.md`: 29 traps, written up with symptoms and fixes
-- [x] `checks.toml`: 61 checks with versions, risk, verify and fix steps (55 with a confirmed version, 5 unverified, 1 manual)
+- [x] `LESSONS.md`: 30 traps, written up with symptoms and fixes
+- [x] `checks.toml`: 62 checks with versions, risk, verify and fix steps (55 with a confirmed version, 6 unverified, 1 manual)
 - [x] Read-only UniFi controller checks (`--unifi`)
 - [ ] UniFi checks run against a live console (lab test of API key access to the legacy API)
 - [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)

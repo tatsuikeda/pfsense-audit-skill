@@ -118,7 +118,7 @@ EXPECT_GOOD = {
     "PFB-007": "PASS", "PFB-008": "PASS", "PFB-009": "PASS",
     "REC-001": "PASS", "REC-002": "PASS", "REC-003": "PASS", "REC-004": "PASS",
     "MON-001": "PASS", "MON-002": "PASS", "MON-003": "PASS", "MON-004": "PASS",
-    "HW-001": "PASS", "HW-002": "PASS", "HW-003": "PASS", "HW-004": "PASS", "HW-005": "INFO", "HW-006": "INFO",
+    "HW-001": "PASS", "HW-002": "PASS", "HW-003": "PASS", "HW-004": "PASS", "HW-005": "INFO", "HW-006": "INFO", "HW-007": "SKIP",
     "UPS-001": "PASS",
     "UNIFI-001": "PASS", "UNIFI-002": "PASS", "UNIFI-003": "PASS", "UNIFI-004": "PASS", "UNIFI-005": "PASS",
     "UNIFI-006": "PASS", "UNIFI-007": "INFO",
@@ -136,7 +136,7 @@ EXPECT_BAD = {
     "PFB-007": "INFO", "PFB-008": "FAIL", "PFB-009": "FAIL",
     "REC-001": "WARN", "REC-002": "WARN", "REC-003": "INFO", "REC-004": "WARN",
     "MON-001": "WARN", "MON-002": "WARN", "MON-003": "WARN", "MON-004": "WARN",
-    "HW-001": "WARN", "HW-002": "WARN", "HW-003": "WARN", "HW-004": "FAIL", "HW-005": "INFO", "HW-006": "INFO",
+    "HW-001": "WARN", "HW-002": "WARN", "HW-003": "WARN", "HW-004": "FAIL", "HW-005": "INFO", "HW-006": "INFO", "HW-007": "SKIP",
     "UPS-001": "FAIL",
     "UNIFI-001": "FAIL", "UNIFI-002": "WARN", "UNIFI-003": "FAIL", "UNIFI-004": "WARN", "UNIFI-005": "WARN",
     "UNIFI-006": "FAIL", "UNIFI-007": "INFO",
@@ -218,12 +218,46 @@ class AccessTest(unittest.TestCase):
         self.assertEqual(run("ACCESS-003", make_ctx("bad", config=[remove("system/ssh/enable")])).status, "PASS")
 
     def test_ssh_kbdinteractive_alone_fails(self):
-        r = run("ACCESS-003", make_ctx(sections={"sshd": "PasswordAuthentication no\nKbdInteractiveAuthentication yes"}))
+        r = run("ACCESS-003", make_ctx(sections={"sshd": "passwordauthentication no\nkbdinteractiveauthentication yes"}))
         self.assertEqual(r.status, "FAIL")
 
     def test_ssh_unreadable_config_does_not_pass(self):
         # Fixed in pfaudit.py: an empty sshd section used to report key-only.
-        self.assertEqual(run("ACCESS-003", make_ctx(sections={"sshd": ""})).status, "WARN")
+        self.assertEqual(run("ACCESS-003", make_ctx(sections={"sshd": "", "sshd_file": ""})).status, "WARN")
+
+    # Reddit review (2026-11-12): absence of "yes" is not proof passwords are off.
+    def test_ssh_file_fallback_without_explicit_no_warns(self):
+        ctx = make_ctx(sections={"sshd": "", "sshd_file": "PubkeyAuthentication yes"})
+        self.assertEqual(run("ACCESS-003", ctx).status, "WARN")
+
+    def test_ssh_file_fallback_challengeresponse_alias(self):
+        ctx = make_ctx(sections={"sshd": "", "sshd_file": "PasswordAuthentication no\nChallengeResponseAuthentication no"})
+        self.assertEqual(run("ACCESS-003", ctx).status, "PASS")
+
+    def test_ssh_match_block_reenabling_passwords_fails(self):
+        ctx = make_ctx(sections={"sshd_match": "Match Address 192.0.2.0/24 :: PasswordAuthentication yes"})
+        r = run("ACCESS-003", ctx)
+        self.assertEqual(r.status, "FAIL")
+        self.assertIn("Match", r.detail)
+
+    def test_ssh_match_block_keeping_keys_passes(self):
+        ctx = make_ctx(sections={"sshd_match": "Match User backup :: AuthenticationMethods publickey"})
+        self.assertEqual(run("ACCESS-003", ctx).status, "PASS")
+
+    def test_ssh_include_warns(self):
+        ctx = make_ctx(sections={"sshd_match": "include /etc/ssh/sshd_config.d/*.conf"})
+        self.assertEqual(run("ACCESS-003", ctx).status, "WARN")
+
+    def test_ssh_key_plus_password_mode_passes(self):
+        # pfSense "Public Key + Password" writes AuthenticationMethods publickey,password.
+        eff = "passwordauthentication yes\nkbdinteractiveauthentication yes\nauthenticationmethods publickey,password"
+        r = run("ACCESS-003", make_ctx(sections={"sshd": eff}))
+        self.assertEqual(r.status, "PASS")
+        self.assertIn("key plus a password", r.detail)
+
+    def test_ssh_methods_allowing_password_alone_fails(self):
+        eff = "passwordauthentication yes\nkbdinteractiveauthentication no\nauthenticationmethods publickey password"
+        self.assertEqual(run("ACCESS-003", make_ctx(sections={"sshd": eff})).status, "FAIL")
 
     def test_disabled_admin_user_ignored(self):
         ctx = make_ctx(config=[remove("system/user")])
@@ -270,10 +304,13 @@ class ExternalTestsTest(unittest.TestCase):
                 targets.append(addr[0])
                 return 111  # refused
 
-            def sendto(self, data, addr):
+            def connect(self, addr):
                 targets.append(addr[0])
 
-            def recvfrom(self, n):
+            def send(self, data):
+                pass
+
+            def recv(self, n):
                 raise TimeoutError
 
         with mock.patch.object(pa.socket, "socket", FakeSocket):
@@ -281,6 +318,48 @@ class ExternalTestsTest(unittest.TestCase):
         self.assertEqual(out["ip"], "203.0.113.77")
         self.assertEqual(set(targets), {"203.0.113.77"})
         self.assertFalse(any(out["tcp"].values()) or any(out["udp"].values()))
+        # Silence is recorded as unknown, never as closed.
+        self.assertEqual(set(out["udp"].values()), {None})
+
+    def test_udp_refused_is_closed_and_reply_is_open(self):
+        ctx = make_ctx()
+        outcome = {53: "reply", 123: "refused", 161: "silent", 1900: "reply"}
+        payloads = {}
+
+        class FakeSocket:
+            def __init__(self, *a, **k):
+                self.port = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, t):
+                pass
+
+            def connect_ex(self, addr):
+                return 111
+
+            def connect(self, addr):
+                self.port = addr[1]
+
+            def send(self, data):
+                payloads[self.port] = data
+
+            def recv(self, n):
+                o = outcome[self.port]
+                if o == "refused":
+                    raise ConnectionRefusedError
+                if o == "silent":
+                    raise TimeoutError
+                return b"x"
+
+        with mock.patch.object(pa.socket, "socket", FakeSocket):
+            out = pa.external_tests(ctx)
+        self.assertEqual(out["udp"], {53: True, 123: False, 161: None, 1900: True})
+        self.assertIn(f"HOST:{out['ip']}:1900".encode(), payloads[1900])
 
 
 class VpnTest(unittest.TestCase):
@@ -419,7 +498,10 @@ class RecoveryMonitorHardwareTest(unittest.TestCase):
         self.assertEqual(run("REC-003", make_ctx(sections={"bectl": "0"})).status, "INFO")
 
     def test_updates_flag_off_skips(self):
-        self.assertEqual(run("REC-004", make_ctx(sections={"updates": ""})).status, "SKIP")
+        self.assertEqual(run("REC-004", make_ctx(args=make_args(updates=False))).status, "SKIP")
+
+    def test_updates_flag_on_but_empty_warns(self):
+        self.assertEqual(run("REC-004", make_ctx(sections={"updates": ""})).status, "WARN")
 
     def test_gateway_without_monitor_warns(self):
         self.assertEqual(run("MON-001", make_ctx(config=[remove("gateways/gateway_item/monitor")])).status, "WARN")
@@ -756,3 +838,129 @@ class TestAccess007Order(unittest.TestCase):
         x = ('<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><any/></destination></rule>'
              '<rule><type>block</type><interface>openvpn</interface><source><any/></source><destination><network>(self)</network></destination></rule>')
         self.assertEqual(pa.CHECKS["ACCESS-007"](self._ctx(x)).status, "FAIL")
+
+
+def add(parent_path, xml):
+    """Config edit: append an element parsed from xml under parent_path."""
+    def edit(root):
+        parent = root.find(parent_path)
+        if parent is None:
+            parent = ET.SubElement(root, parent_path)
+        parent.append(ET.fromstring(xml))
+    return edit
+
+
+class RedditReviewTest(unittest.TestCase):
+    """Fixes from the r/PFSENSE code review on 2026-11-12: each was a possible false pass."""
+
+    # VPN-004: interface groups, floating rules, interface networks and aliases.
+    def test_vpn_rule_to_lan_net_warns(self):
+        rule = "<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><network>lan</network></destination></rule>"
+        r = run("VPN-004", make_ctx(config=[add("filter", rule)]))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("lan subnet", r.detail)
+
+    def test_vpn_rule_on_assigned_ovpn_interface_warns(self):
+        iface = "<opt9><if>ovpns1</if><enable/></opt9>"
+        rule = "<rule><type>pass</type><interface>opt9</interface><source><any/></source><destination><any/></destination></rule>"
+        self.assertEqual(run("VPN-004", make_ctx(config=[add("interfaces", iface), add("filter", rule)])).status, "WARN")
+
+    def test_vpn_floating_rule_warns(self):
+        rule = ("<rule><type>pass</type><floating>yes</floating><interface>wan,openvpn</interface>"
+                "<source><any/></source><destination><any/></destination></rule>")
+        r = run("VPN-004", make_ctx(config=[add("filter", rule)]))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("floating", r.detail)
+
+    def test_vpn_alias_covering_lan_warns(self):
+        alias = "<alias><name>Inside</name><type>network</type><address>Nested</address></alias>"
+        nested = "<alias><name>Nested</name><type>network</type><address>192.0.2.0/24</address></alias>"
+        rule = "<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><address>Inside</address></destination></rule>"
+        ctx = make_ctx(config=[add("aliases", alias), add("aliases", nested), add("filter", rule)])
+        r = run("VPN-004", ctx)
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("alias Inside", r.detail)
+
+    def test_vpn_unresolvable_alias_warns(self):
+        alias = "<alias><name>Remote</name><type>urltable</type><url>https://example.com/list</url></alias>"
+        rule = "<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><address>Remote</address></destination></rule>"
+        r = run("VPN-004", make_ctx(config=[add("aliases", alias), add("filter", rule)]))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("could not be resolved", r.detail)
+
+    def test_vpn_host_alias_stays_scoped(self):
+        alias = "<alias><name>Printer</name><type>host</type><address>192.0.2.157</address></alias>"
+        rule = "<rule><type>pass</type><interface>openvpn</interface><source><any/></source><destination><address>Printer</address><port>631</port></destination></rule>"
+        self.assertEqual(run("VPN-004", make_ctx(config=[add("aliases", alias), add("filter", rule)])).status, "PASS")
+
+    def test_vpn_wide_rule_reports_port_and_family(self):
+        rule = ("<rule><type>pass</type><interface>openvpn</interface><ipprotocol>inet6</ipprotocol><protocol>tcp</protocol>"
+                "<source><any/></source><destination><any/><port>443</port></destination></rule>")
+        d = run("VPN-004", make_ctx(config=[add("filter", rule)])).detail
+        self.assertIn("port 443", d)
+        self.assertIn("IPv6 only", d)
+
+    # PERIM-005: silence is not closed.
+    def test_udp_silent_but_allowed_by_wan_rule_warns(self):
+        ext = {"ip": "203.0.113.1", "tcp": {}, "udp": {53: None, 123: None, 161: None, 1900: None}}
+        rule = "<rule><type>pass</type><interface>wan</interface><protocol>udp</protocol><source><any/></source><destination><any/><port>161</port></destination></rule>"
+        r = run("PERIM-005", make_ctx(external=ext, config=[add("filter", rule)]))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("161", r.detail)
+
+    def test_udp_silent_and_not_allowed_passes(self):
+        ext = {"ip": "203.0.113.1", "tcp": {}, "udp": {53: None, 123: False, 161: None, 1900: None}}
+        r = run("PERIM-005", make_ctx(external=ext))
+        self.assertEqual(r.status, "PASS")
+        self.assertIn("silent", r.detail)
+
+    def test_udp_port_forward_range_counts(self):
+        nat = "<rule><interface>wan</interface><protocol>udp</protocol><target>192.0.2.5</target><destination><any/><port>100-200</port></destination></rule>"
+        ext = {"ip": "203.0.113.1", "tcp": {}, "udp": {161: None}}
+        self.assertEqual(run("PERIM-005", make_ctx(external=ext, config=[add("nat", nat)])).status, "WARN")
+
+    # UNIFI-006: a capture that never ran is not a clean result.
+    def test_dhcp_capture_failure_warns(self):
+        r = run("UNIFI-006", make_ctx(sections={"dhcpscan": "", "dhcpscan_rc": "1"}))
+        self.assertEqual(r.status, "WARN")
+
+    def test_dhcp_capture_missing_warns(self):
+        ctx = make_ctx()
+        del ctx.sections["dhcpscan_rc"]
+        results = {r["id"]: r for r in pa.build(CATALOG, ctx)}
+        self.assertEqual(results["UNIFI-006"]["status"], "WARN")
+
+    # Run completeness: a section that never arrived must not pass.
+    def test_missing_section_reports_warn_not_pass(self):
+        ctx = make_ctx()
+        del ctx.sections["zpool"]
+        results = {r["id"]: r for r in pa.build(CATALOG, ctx)}
+        self.assertEqual(results["HW-004"]["status"], "WARN")
+        self.assertIn("zpool", results["HW-004"]["detail"])
+
+    def test_remote_sections_known(self):
+        self.assertIn("sshd_match", pa.REMOTE_SECTIONS)
+        self.assertTrue(pa.REMOTE_SCRIPT.rstrip().endswith("s end"))
+
+    def test_incomplete_banner(self):
+        ctx = make_ctx()
+        ctx.incomplete = True
+        self.assertIn("did not finish", pa.markdown(pa.build(CATALOG, ctx), ctx))
+
+    # HW-007: forced media with IPv6 tracking (reader report, lesson 30).
+    def _track6(self, media_on):
+        edits = [set_text("interfaces/lan/enable", ""), set_text("interfaces/lan/ipaddrv6", "track6"), set_text("interfaces/lan/track6-interface", "wan")]
+        if media_on:
+            edits.append(set_text(f"interfaces/{media_on}/media", "autoselect"))
+        return make_ctx(config=edits)
+
+    def test_track6_with_default_media_passes(self):
+        self.assertEqual(run("HW-007", self._track6(None)).status, "PASS")
+
+    def test_track6_with_autoselect_on_lan_warns(self):
+        r = run("HW-007", self._track6("lan"))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("autoselect", r.detail)
+
+    def test_track6_with_media_on_tracked_wan_warns(self):
+        self.assertEqual(run("HW-007", self._track6("wan")).status, "WARN")

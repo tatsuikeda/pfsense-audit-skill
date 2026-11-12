@@ -247,3 +247,33 @@ class ChecksTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PagesTest(unittest.TestCase):
+    """pages() is all or nothing (r/PFSENSE review, 2026-11-12)."""
+
+    def _client(self, responses):
+        client = FakeClient({})
+        it = iter(responses)
+        client.get = lambda path, params=None: next(it)
+        return client
+
+    def test_many_pages_collected(self):
+        full = [{"data": [{"i": 0}] * 200, "totalCount": 450}, {"data": [{"i": 1}] * 200, "totalCount": 450},
+                {"data": [{"i": 2}] * 50, "totalCount": 450}]
+        self.assertEqual(len(self._client(full).pages("/x")), 450)
+
+    def test_short_list_raises(self):
+        resp = [{"data": [{"i": 0}] * 200, "totalCount": 450}, {"data": [], "totalCount": 450}]
+        with self.assertRaises(pa.UnifiError):
+            self._client(resp).pages("/x")
+
+    def test_no_total_reads_until_short_page(self):
+        resp = [{"data": [{"i": 0}] * 200}, {"data": [{"i": 1}] * 10}]
+        self.assertEqual(len(self._client(resp).pages("/x")), 210)
+
+    def test_page_cap_raises_instead_of_truncating(self):
+        client = self._client([{"data": [{"i": 0}] * 200, "totalCount": 10**9}] * 3)
+        client.MAX_PAGES = 3
+        with self.assertRaises(pa.UnifiError):
+            client.pages("/x")

@@ -54,7 +54,9 @@ s unbound; pgrep -x unbound >/dev/null && echo running || echo stopped
 s dns_local; timeout 8 drill example.com @127.0.0.1 2>/dev/null | grep -oE 'rcode: [A-Z]+' | head -1
 s dns_intercept; timeout 5 drill example.com @192.0.2.1 2>/dev/null | grep -E 'rcode|IN[[:space:]]+A[[:space:]]' | grep -v '^;;.*QUEST' | head -2
 s dnsbl_test; d=$(awk -F, 'NR==50{print $2}' /var/unbound/pfb_py_zone.txt 2>/dev/null); if [ -n "$d" ]; then echo "domain $d"; echo "direct $(timeout 6 drill $d @127.0.0.1 2>/dev/null | awk '/[[:space:]]IN[[:space:]]+A[[:space:]]/&&!/^;/{print $NF}' | head -1)"; echo "sub $(timeout 6 drill zz-audit-probe.$d @127.0.0.1 2>/dev/null | awk '/[[:space:]]IN[[:space:]]+A[[:space:]]/&&!/^;/{print $NF}' | head -1)"; fi
-s sshd; grep -iE '^[[:space:]]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|AuthenticationMethods|PermitRootLogin)' /etc/ssh/sshd_config 2>/dev/null
+s sshd; /usr/sbin/sshd -T 2>/dev/null | grep -iE '^(passwordauthentication|kbdinteractiveauthentication|authenticationmethods|pubkeyauthentication|permitrootlogin) '
+s sshd_file; grep -iE '^[[:space:]]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|AuthenticationMethods|PermitRootLogin)' /etc/ssh/sshd_config 2>/dev/null
+s sshd_match; awk 'tolower($1)=="include"{print "include " $2} tolower($1)=="match"{m=$0} m!="" && tolower($1) ~ /^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|authenticationmethods)$/{print m " :: " $0}' /etc/ssh/sshd_config 2>/dev/null
 s ups; for u in $(upsc -l 2>/dev/null); do echo "$u $(upsc $u@localhost ups.status 2>/dev/null)"; done
 s ifconfig; ifconfig -a 2>/dev/null | grep -E '^[a-z]|options='
 s certs; for f in /var/etc/cert.crt /var/etc/openvpn/server*/cert; do [ -f "$f" ] && echo "$f|$(openssl x509 -noout -enddate -in $f 2>/dev/null | cut -d= -f2)"; done
@@ -63,16 +65,29 @@ s unbound_eff; grep -E '^[[:space:]]*(msg-cache-size|rrset-cache-size|prefetch|p
 s ovpn_push; for f in /var/etc/openvpn/server*/config.ovpn; do [ -f "$f" ] || continue; n=${f%/config.ovpn}; n=${n##*server}; echo "$n $(grep 'dhcp-option DNS' "$f" | awk '{print $NF}' | tr -d '"' | tr '\n' ' ')"; done
 s pfb_age; echo "$(find /var/db/pfblockerng/dnsbl /var/db/pfblockerng/deny -name '*.txt' -mtime -2 2>/dev/null | wc -l) $(find /var/db/pfblockerng/dnsbl /var/db/pfblockerng/deny -name '*.txt' 2>/dev/null | wc -l)"
 s smtpfail; date '+%Y %b %d %H:%M:%S'; grep 'Could not send the message' /var/log/system.log 2>/dev/null | tail -1 | awk '{print $1, $2, $3}'
+s end
 """
 
-UPDATES_SCRIPT = 's() { echo "@@$1"; }\ns updates; timeout 120 pfSense-upgrade -c 2>&1 | tail -3\n'
+UPDATES_SCRIPT = 's() { echo "@@$1"; }\ns updates; timeout 120 pfSense-upgrade -c 2>&1 | tail -3\ns end\n'
 
 
 def dhcp_scan_script(lan_if: str, fw_mac: str) -> str:
     return (
         's() { echo "@@$1"; }\ns dhcpscan; '
         f"timeout 45 tcpdump -nn -e -l -i {lan_if} -c 20 'udp src port 67 and not ether src {fw_mac}' 2>/dev/null\n"
+        # tcpdump exits 0 after 20 packets; timeout(1) exits 124 after 45 s of listening.
+        # Anything else means the capture never ran, which must not read as "no rogue server".
+        "rc=$?; s dhcpscan_rc; echo $rc; s end\n"
     )
+
+
+# Sections every full run must return. A missing one means the remote run was
+# cut short, and a check that reads it reports WARN instead of passing on no data.
+REMOTE_SECTIONS = frozenset(re.findall(r"^s ([a-z_0-9]+);", REMOTE_SCRIPT, re.M))
+
+
+class MissingData(Exception):
+    """A check needed a section the remote run did not return."""
 
 
 SECRET_KEY = re.compile(r"(pass|secret|key|prv|crt|hash|token|psk|tls|community)", re.I)
@@ -95,6 +110,7 @@ class Ctx:
     external: dict = field(default_factory=dict)
     feeds: list = field(default_factory=list)
     unifi: dict = field(default_factory=dict)
+    incomplete: bool = False
 
     def get(self, path: str, default: str | None = None) -> str | None:
         el = self.root.find(path)
@@ -109,11 +125,14 @@ class Ctx:
         return self.root.findall(path)
 
     def sec(self, name: str) -> str:
-        return self.sections.get(name, "").strip()
+        if name not in self.sections:
+            raise MissingData(name)
+        return self.sections[name].strip()
 
     @property
     def version(self) -> str:
-        return self.sec("version").splitlines()[0] if self.sec("version") else "unknown"
+        v = self.sections.get("version", "").strip()
+        return v.splitlines()[0] if v else "unknown"
 
     @property
     def is_29(self) -> bool:
@@ -194,17 +213,55 @@ def _(ctx):
     return Result("PASS", f"{t} minutes") if t <= 30 else Result("WARN", f"{t} minutes (default 240); 15 to 30 recommended")
 
 
+def sshd_settings(text: str) -> dict[str, str]:
+    """First value wins, as in sshd_config. ChallengeResponseAuthentication is the
+    old name of KbdInteractiveAuthentication."""
+    out: dict[str, str] = {}
+    for line in text.lower().splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            key = "kbdinteractiveauthentication" if parts[0] == "challengeresponseauthentication" else parts[0]
+            out.setdefault(key, parts[1].strip())
+    return out
+
+
+def key_required(methods: str) -> bool:
+    """AuthenticationMethods where every allowed method list includes publickey."""
+    lists = methods.split()
+    return bool(lists) and methods != "any" and all("publickey" in m.split(",") for m in lists)
+
+
 @check("ACCESS-003")
 def _(ctx):
     if not ctx.has("system/ssh/enable"):
         return Result("PASS", "SSH disabled")
-    cfg = ctx.sec("sshd").lower()
-    if not cfg:  # no lines read: cannot claim key-only (OpenSSH defaults to passwords on)
-        return Result("WARN", "SSH enabled, but sshd_config could not be read to confirm key-only login")
-    pw = re.search(r"passwordauthentication\s+yes", cfg) or re.search(r"kbdinteractiveauthentication\s+yes", cfg)
-    if pw:
-        return Result("FAIL", "SSH enabled and accepts passwords (from sshd_config); use key-only")
-    return Result("PASS", "SSH enabled, key authentication only")
+    # Prefer sshd -T: the effective settings after Include files and OpenSSH defaults.
+    # The file alone is not enough, because a setting that is absent defaults to yes.
+    eff, src = sshd_settings(ctx.sec("sshd")), "sshd -T"
+    if not eff:
+        eff, src = sshd_settings(ctx.sec("sshd_file")), "sshd_config"
+    if not eff:
+        return Result("WARN", "SSH enabled, but neither sshd -T nor sshd_config could be read to confirm key-only login")
+    match = [l for l in ctx.sec("sshd_match").splitlines() if l.strip()]
+    includes = [l for l in match if l.startswith("include ")]
+    overrides = [l.split(" :: ", 1)[-1].strip() for l in match if " :: " in l]
+    loosened = [o for o in overrides if o.lower().split()[-1] == "yes"
+                or (o.lower().startswith("authenticationmethods") and not key_required(" ".join(o.lower().split()[1:])))]
+    if key_required(eff.get("authenticationmethods", "")):
+        how = "a key plus a password" if "password" in eff["authenticationmethods"] else "a key"
+        base = Result("PASS", f"SSH enabled; every login needs {how} ({src})")
+    elif "yes" in (eff.get("passwordauthentication"), eff.get("kbdinteractiveauthentication")):
+        return Result("FAIL", f"SSH enabled and accepts passwords ({src}); use key-only")
+    elif src == "sshd_config" and not (eff.get("passwordauthentication") == "no" and eff.get("kbdinteractiveauthentication") == "no"):
+        return Result("WARN", "sshd_config does not explicitly turn off password and keyboard-interactive login, "
+                              "and OpenSSH allows them by default; sshd -T could not be read to confirm")
+    else:
+        base = Result("PASS", f"SSH enabled, key authentication only ({src})")
+    if loosened:
+        return Result("FAIL", "A Match block in sshd_config re-enables password login: " + "; ".join(loosened)[:200])
+    if includes:  # Match blocks inside included files are not read
+        return Result("WARN", base.detail + "; sshd_config includes other files whose Match blocks were not read: " + ", ".join(i.split()[1] for i in includes)[:160])
+    return base
 
 
 @check("ACCESS-004")
@@ -298,8 +355,48 @@ def _(ctx):
         return Result("SKIP", "Run with --external from outside the network")
     if ctx.external.get("error"):
         return Result("SKIP", f"External test not run: {ctx.external['error']}")
-    rep = [p for p, ok in ctx.external.get("udp", {}).items() if ok]
-    return Result("WARN", f"UDP services answer from outside: {rep}") if rep else Result("PASS", "No UDP replies from outside")
+    udp = ctx.external.get("udp", {})
+    rep = [p for p, ok in udp.items() if ok]
+    if rep:
+        return Result("WARN", f"UDP services answer from outside: {rep}")
+    silent = [p for p, ok in udp.items() if ok is None]
+    allowed = [p for p in silent if wan_allows_udp(ctx, p)]
+    if allowed:
+        return Result("WARN", f"No reply on UDP {allowed}, but WAN rules or port forwards allow it; "
+                              "a service that ignores these probes would look the same, so check it by hand")
+    closed = [p for p, ok in udp.items() if ok is False]
+    return Result("PASS", "No UDP service answered from outside"
+                  + (f"; {silent} silent and not allowed by any WAN rule" if silent else "")
+                  + (f"; {closed} refused" if closed else ""))
+
+
+def port_in(spec: str, port: int) -> bool:
+    """pfSense port field: empty (any), a number, a range a:b or a-b, or an alias name."""
+    if not spec:
+        return True
+    m = re.fullmatch(r"(\d+)(?:[:-](\d+))?", spec)
+    if not m:
+        return True  # a port alias: assume it may include the port
+    lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+    return lo <= port <= hi
+
+
+def wan_allows_udp(ctx: Ctx, port: int) -> bool:
+    """A pass rule or port forward on WAN that could let this UDP port in."""
+    for r in ctx.all("filter/rule") + ctx.all("nat/rule"):
+        if r.find("disabled") is not None:
+            continue
+        is_nat = r.find("target") is not None or r.find("local-port") is not None
+        if not is_nat and r.findtext("type") != "pass":
+            continue
+        if "wan" not in (r.findtext("interface") or "").split(","):
+            continue
+        if (r.findtext("protocol") or "any") not in ("udp", "tcp/udp", "any", ""):
+            continue
+        dst = r.find("destination")
+        if port_in((dst.findtext("port") if dst is not None else "") or "", port):
+            return True
+    return False
 
 
 def ovpn_servers(ctx):
@@ -345,10 +442,97 @@ def _(ctx):
     return Result("WARN", f"Strict user/CN off: {', '.join(bad)}") if bad else Result("PASS", "Strict user/CN on")
 
 
+def vpn_ifaces(ctx: Ctx) -> set[str]:
+    """The OpenVPN interface group plus any OpenVPN instance assigned as its own interface."""
+    names = {"openvpn"}
+    ifs = ctx.root.find("interfaces")
+    for el in list(ifs) if ifs is not None else []:
+        if (el.findtext("if") or "").startswith("ovpn"):
+            names.add(el.tag)
+    return names
+
+
+def alias_entries(ctx: Ctx, name: str, seen: frozenset = frozenset()) -> list[str] | None:
+    """Addresses in a host or network alias, nested aliases expanded. None if the
+    alias cannot be resolved offline (URL tables, unknown names, loops)."""
+    if name in seen:
+        return None
+    for a in ctx.all("aliases/alias"):
+        if a.findtext("name") == name:
+            if (a.findtext("type") or "") not in ("host", "network"):
+                return None
+            out = []
+            for item in (a.findtext("address") or "").split():
+                if re.fullmatch(r"[\d.:a-fA-F]+(/\d+)?", item):
+                    out.append(item)
+                else:
+                    sub_entries = alias_entries(ctx, item, seen | {name})
+                    if sub_entries is None:
+                        return None
+                    out += sub_entries
+            return out
+    return None
+
+
+def iface_subnets(ctx: Ctx) -> list:
+    import ipaddress
+    nets = []
+    ifs = ctx.root.find("interfaces")
+    for el in list(ifs) if ifs is not None else []:
+        ip, bits = el.findtext("ipaddr") or "", el.findtext("subnet") or ""
+        if el.tag != "wan" and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip) and bits.isdigit():
+            nets.append(ipaddress.ip_network(f"{ip}/{bits}", strict=False))
+    return nets
+
+
+def wide_destination(ctx: Ctx, rule: ET.Element) -> str | None:
+    """Why a rule's destination covers a whole network, or None if it is a host or small range."""
+    import ipaddress
+    dst = rule.find("destination")
+    if dst is None or dst.find("not") is not None:
+        return "a negated destination (everything except one target)" if dst is not None else None
+    if dst.find("any") is not None:
+        return "any destination"
+    net = dst.findtext("network") or ""
+    if net and not net.endswith("ip") and net != "(self)":
+        return f"the whole {net} subnet"
+    addr = dst.findtext("address") or ""
+    if not addr:
+        return None
+    entries = [addr] if re.fullmatch(r"[\d.:a-fA-F]+(/\d+)?", addr) else alias_entries(ctx, addr)
+    if entries is None:
+        return f"alias {addr}, which could not be resolved offline"
+    lans = iface_subnets(ctx)
+    for e in entries:
+        try:
+            n = ipaddress.ip_network(e, strict=False)
+        except ValueError:
+            return f"alias {addr}, which could not be resolved offline"
+        if n.num_addresses > 16 or any(n.version == l.version and (l.subnet_of(n)) for l in lans):
+            return f"{e}" + (f" (in alias {addr})" if e != addr else "")
+    return None
+
+
 @check("VPN-004")
 def _(ctx):
-    wide = [r for r in rules(ctx, "openvpn") if r.findtext("type") == "pass" and is_any(r, "destination")]
-    return Result("WARN", "VPN users can reach every LAN device") if wide else Result("PASS", "VPN access is scoped")
+    ifaces = vpn_ifaces(ctx)
+    wide = []
+    for r in ctx.all("filter/rule"):
+        if r.find("disabled") is not None or r.findtext("type") != "pass":
+            continue
+        on = set((r.findtext("interface") or "").split(","))
+        if not on & ifaces:  # floating rules list several interfaces
+            continue
+        why = wide_destination(ctx, r)
+        if why:
+            label = r.findtext("descr") or r.findtext("tracker") or "rule"
+            port = (r.find("destination").findtext("port") if r.find("destination") is not None else "") or ""
+            fam = {"inet6": " (IPv6 only)", "inet46": " (IPv4 and IPv6)"}.get(r.findtext("ipprotocol") or "", "")
+            wide.append(f"{label}: {why}" + (f", port {port}" if port else ", all ports") + fam
+                        + (" (floating)" if r.find("floating") is not None else ""))
+    if wide:
+        return Result("WARN", "VPN users can reach whole networks: " + "; ".join(wide)[:300])
+    return Result("PASS", f"VPN access is scoped (checked rules on {', '.join(sorted(ifaces))}, including floating rules)")
 
 
 @check("VPN-005")
@@ -584,9 +768,11 @@ def _(ctx):
 
 @check("REC-004")
 def _(ctx):
+    if not getattr(ctx.args, "updates", False):
+        return Result("SKIP", "Run with --updates to check for pfSense updates")
     u = ctx.sec("updates")
     if not u:
-        return Result("SKIP", "Run with --updates to check for pfSense updates")
+        return Result("WARN", "Update check returned nothing; run pfSense-upgrade -c on the firewall")
     return Result("PASS", "Up to date") if "up to date" in u.lower() else Result("WARN", u.splitlines()[-1][:120])
 
 
@@ -834,6 +1020,27 @@ def _(ctx):
 @check("HW-006")
 def _(ctx):
     return Result("INFO", "Manual: pull AC while running and confirm it boots unattended")
+
+
+@check("HW-007")
+def _(ctx):
+    # Speed and Duplex "Default" stores nothing; any other choice, even "autoselect",
+    # stores <media> and is reapplied with ifconfig on every interface reconfigure.
+    # With IPv6 Track Interface that happens on prefix changes, and users report flapping.
+    ifs = ctx.root.find("interfaces")
+    els = {el.tag: el for el in (list(ifs) if ifs is not None else [])}
+    involved = set()
+    for name, el in els.items():
+        if el.find("enable") is not None and (el.findtext("ipaddrv6") or "") == "track6":
+            involved |= {name, el.findtext("track6-interface") or ""}
+    forced = [f"{n} ({' '.join(x for x in (els[n].findtext('media'), els[n].findtext('mediaopt')) if x)})"
+              for n in sorted(involved) if n in els and (els[n].findtext("media") or els[n].findtext("mediaopt"))]
+    if not involved:
+        return Result("SKIP", "No interface uses IPv6 Track Interface")
+    if forced:
+        return Result("WARN", f"Speed and Duplex is set on {', '.join(forced)}, which uses or feeds IPv6 tracking; "
+                              "users report link flapping with this combination (lesson 30)")
+    return Result("PASS", "IPv6 tracking interfaces use the default Speed and Duplex")
 
 
 @check("UPS-001")
@@ -1124,6 +1331,9 @@ def _(ctx):
 def _(ctx):
     if not ctx.args.dhcp_scan:
         return Result("SKIP", "Run with --dhcp-scan to listen 45 s for rogue DHCP servers")
+    rc = ctx.sec("dhcpscan_rc")
+    if rc not in ("0", "124"):  # 0: 20 packets seen, 124: listened the full 45 s
+        return Result("WARN", f"The DHCP capture did not run (tcpdump exit {rc or 'unknown'}); no result")
     lines = [l for l in ctx.sec("dhcpscan").splitlines() if l.strip()]
     if not lines:
         return Result("PASS", "No DHCP replies from other servers")
@@ -1144,17 +1354,27 @@ def external_tests(ctx: Ctx) -> dict:
         with socket.socket() as s:
             s.settimeout(3)
             tcp[p] = s.connect_ex((ip, p)) == 0
+    # UDP has three outcomes: a reply (open), an ICMP port unreachable (closed), or
+    # silence. Silence is what a default-deny WAN gives, but also what a service gives
+    # when it ignores our probe (wrong SNMP community, restricted NTP). So silence is
+    # recorded as None, never as closed, and PERIM-005 cross-checks it against the rules.
     udp = {}
-    probes = {53: bytes.fromhex("abcd01000001000000000000076578616d706c6503636f6d0000010001"), 123: b"\x1b" + b"\0" * 47, 161: bytes.fromhex("302902010004067075626c6963a01c0204000000010201000201003011300f060b2b060102010101000500"), 1900: b"M-SEARCH * HTTP/1.1\r\nHOST:239.255.255.250:1900\r\nMAN:\"ssdp:discover\"\r\nMX:1\r\nST:ssdp:all\r\n\r\n"}
+    probes = {53: bytes.fromhex("abcd01000001000000000000076578616d706c6503636f6d0000010001"), 123: b"\x1b" + b"\0" * 47,
+              161: bytes.fromhex("302902010004067075626c6963a01c0204000000010201000201003011300f060b2b060102010101000500"),
+              # Unicast M-SEARCH: HOST names the device probed, not the multicast group.
+              1900: f"M-SEARCH * HTTP/1.1\r\nHOST:{ip}:1900\r\nMAN:\"ssdp:discover\"\r\nMX:1\r\nST:ssdp:all\r\n\r\n".encode()}
     for p, payload in probes.items():
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.settimeout(2)
             try:
-                s.sendto(payload, (ip, p))
-                s.recvfrom(1500)
+                s.connect((ip, p))  # connected, so an ICMP unreachable surfaces as ConnectionRefusedError
+                s.send(payload)
+                s.recv(1500)
                 udp[p] = True
-            except OSError:
+            except ConnectionRefusedError:
                 udp[p] = False
+            except OSError:
+                udp[p] = None
     return {"ip": ip, "tcp": tcp, "udp": udp}
 
 
@@ -1348,19 +1568,31 @@ class UnifiClient:
         except ValueError:
             raise UnifiError(f"non-JSON response on {path}") from None
 
+    MAX_PAGES = 1000  # 200,000 items; far beyond any single site
+
     def pages(self, path: str) -> list:
-        """All items of an Integration API list (offset/limit, limit max 200)."""
-        out, offset = [], 0
-        for _ in range(100):
+        """All items of an Integration API list (offset/limit, limit max 200).
+
+        All or nothing: a list cut short would let a check pass on items it never
+        saw, so any shortfall raises instead of returning a partial list."""
+        out, offset, total = [], 0, None
+        for _ in range(self.MAX_PAGES):
             d = self.get(path, {"offset": offset, "limit": 200})
             data = d.get("data") if isinstance(d, dict) else None
-            if not isinstance(data, list) or not data:
-                break
+            if not isinstance(data, list):
+                raise UnifiError(f"unexpected list response on {path}")
+            if d.get("totalCount") is not None:
+                total = int(d["totalCount"])
             out += data
             offset += len(data)
-            if offset >= int(d.get("totalCount") or 0):
-                break
-        return out
+            if total is not None:
+                if offset >= total:
+                    return out
+                if not data:
+                    raise UnifiError(f"{path}: list ended at {offset} of {total} items")
+            elif len(data) < 200:  # no total given: a short page is the last one
+                return out
+        raise UnifiError(f"{path}: more than {self.MAX_PAGES} pages; refusing a partial list")
 
     def legacy(self, path: str) -> list:
         """A legacy API call; unwraps {meta: {rc}, data: [...]}."""
@@ -1449,6 +1681,8 @@ def build(catalog, ctx):
         fn = CHECKS.get(c["id"])
         try:
             r = fn(ctx) if fn else Result("SKIP", "No implementation yet")
+        except MissingData as e:
+            r = Result("WARN", f"Not checked: the firewall did not return '{e}' (remote run incomplete)")
         except Exception as e:  # noqa: BLE001 one broken check must not stop the audit
             r = Result("SKIP", f"Check error: {type(e).__name__}: {e}")
         unverified = "unverified" in c.get("verified_on", [])
@@ -1465,6 +1699,8 @@ def markdown(results, ctx) -> str:
     out = [f"# pfSense audit: {host.rstrip('.')}", "",
            f"pfSense {ctx.version} · {datetime.now().strftime('%Y-%m-%d %H:%M')} · pfaudit {VERSION}", "",
            " · ".join(f"{ICON[k]} {counts[k]} {k}" for k in ORDER), ""]
+    if getattr(ctx, "incomplete", False):
+        out += ["> [!WARNING]", "> The remote run did not finish, so some data is missing. Checks that needed it report WARN; run the audit again.", ""]
     if ctx.unifi:
         out += [f"UniFi controller {ctx.unifi.get('url', '?')} · Network {ctx.unifi.get('version') or 'unknown'} · TLS {ctx.unifi.get('tls')}", ""]
         if ctx.unifi.get("tls") == "insecure":
@@ -1509,20 +1745,31 @@ def main():
 
     catalog = tomllib.loads((HERE / "checks.toml").read_text())["checks"]
     sections = split_sections(run_remote(args, REMOTE_SCRIPT))
+    missing = sorted(REMOTE_SECTIONS - set(sections) - {"config"})
+    incomplete = "end" not in sections or bool(missing)
+    if incomplete:
+        print("warning: the remote run did not finish" + (f"; missing: {', '.join(missing)}" if missing else "")
+              + ". Checks that need missing data report WARN.", file=sys.stderr)
     try:
         root = ET.fromstring(sections.pop("config"))
     except (KeyError, ET.ParseError) as e:
         sys.exit(f"Could not read config.xml: {e}")
     ctx = Ctx(args.host, sections, root, args)
+    ctx.incomplete = incomplete
     if args.updates:
         ctx.sections.update(split_sections(run_remote(args, UPDATES_SCRIPT)))
     if args.dhcp_scan:
+        # Validate the interface name before it goes into a remote command. If the scan
+        # cannot run, its section stays missing and UNIFI-006 reports WARN, not PASS.
         lan_if = ctx.get("interfaces/lan/if") or ""
         mac = ""
-        for line in run_remote(args, f"ifconfig {lan_if} | grep ether").splitlines():
-            mac = line.split()[-1]
-        if re.fullmatch(r"[a-z0-9]+", lan_if) and re.fullmatch(r"[0-9a-f:]{17}", mac):
+        if re.fullmatch(r"[a-z][a-z0-9_.]*", lan_if):
+            for line in run_remote(args, f"ifconfig {lan_if} | grep ether").splitlines():
+                mac = line.split()[-1]
+        if re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}", mac):
             ctx.sections.update(split_sections(run_remote(args, dhcp_scan_script(lan_if, mac))))
+        else:
+            print(f"warning: DHCP scan skipped, LAN interface {lan_if!r} or its MAC could not be read", file=sys.stderr)
     if args.external:
         ctx.external = external_tests(ctx)
     if args.feeds:
@@ -1533,13 +1780,13 @@ def main():
     results = build(catalog, ctx)
     del root  # the config never leaves memory and is not kept
     if args.json:
-        doc = {"version": ctx.version, "pfaudit": VERSION, "results": results}
+        doc = {"version": ctx.version, "pfaudit": VERSION, "complete": not incomplete, "results": results}
         if ctx.unifi:  # summary only; raw controller data is never output
             doc["unifi"] = {k: ctx.unifi.get(k) for k in ("url", "version", "tls", "errors", "fatal")}
         print(json.dumps(doc, indent=2, default=str))
     else:
         print(markdown(results, ctx))
-    sys.exit(1 if any(r["status"] == "FAIL" for r in results) else 0)
+    sys.exit(1 if any(r["status"] == "FAIL" for r in results) else 2 if incomplete else 0)
 
 
 if __name__ == "__main__":

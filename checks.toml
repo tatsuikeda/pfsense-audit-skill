@@ -43,7 +43,7 @@ verify = { config = "system/ssh/enable absent, or system/ssh/sshdkeyonly == enab
 fix = "System > Advanced > Admin Access > SSH, Authentication Method Public Key Only"
 impact = "reloads sshd; active sessions stay up"
 verified_on = ["ce-2.9.0"]
-notes = "Reads /etc/ssh/sshd_config on the firewall, the ground truth for password authentication."
+notes = "Reads the effective settings with sshd -T (Include files and OpenSSH defaults applied), falls back to sshd_config only with explicit no values, and fails a Match block that re-enables passwords."
 
 [[checks]]
 id = "ACCESS-004"
@@ -143,7 +143,7 @@ id = "PERIM-005"
 category = "perimeter"
 title = "No UDP services answer from the internet except intended ones"
 risk = "medium"
-verify = { external = "probe UDP 53, 123, 161, 500, 1900, 5353 to WAN; expect no replies" }
+verify = { external = "probe UDP 53, 123, 161, 1900 on the WAN address; a reply is open, ICMP unreachable is closed, silence is unknown and warns if a WAN rule or port forward allows the port" }
 verified_on = ["ce-2.9.0"]
 
 [[checks]]
@@ -181,7 +181,7 @@ id = "VPN-004"
 category = "vpn"
 title = "VPN users reach only what they need"
 risk = "high"
-verify = { config = "filter/rule interface=openvpn: flag source any destination any" }
+verify = { config = "pass rules on openvpn, on interfaces assigned to ovpn*, and floating rules that include them: flag a destination of any, an interface subnet, a negated target, or an alias covering more than 16 addresses or a local subnet" }
 fix = "Replace the OpenVPN pass to any rule with rules for only the hosts and ports VPN users need"
 impact = "filter reload"
 verified_on = ["ce-2.9.0"]
@@ -507,6 +507,18 @@ title = "Powers on after an outage"
 risk = "medium"
 verify = { manual = "pull AC while running; it must boot unattended" }
 lesson = 15
+
+[[checks]]
+id = "HW-007"
+category = "hardware"
+title = "No forced link speed on IPv6 tracking interfaces"
+risk = "low"
+verify = { config = "interfaces/*: media or mediaopt set on an interface with ipaddrv6 = track6, or on the interface it tracks" }
+fix = "Interfaces > (interface) > Speed and Duplex: Default (no preference), unless the link really needs a fixed speed"
+impact = "reconfigures the interface; a brief link drop"
+lesson = 30
+verified_on = ["unverified"]
+notes = "Community report (r/PFSENSE, 2026-11-12) citing redmine 9241 and 4428. Confirmed in source only: interface_configure() reapplies media on every reconfigure, which track6 triggers often."
 
 [[checks]]
 id = "UPS-001"
