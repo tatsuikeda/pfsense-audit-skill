@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- Review follow-ups: the self-update gate decodes HTML entities (named and numeric) and TOML or JSON escapes before its character check, so `&zwj;` and similar spellings are caught. Short config codes (protocol, port, TLS type, digest, DNSBL mode, crypto hardware) appear as written when they are plain tokens and quoted otherwise.
+
 - Fourth /sec-audit round: Markdown escaping covers the whole detail line again (round three's quoted-only escaping left unquoted config text live; the tool's own wording no longer needs escapes). The WebGUI protocol, a non-numeric session timeout and UniFi fatal errors are quoted, the JSON UniFi summary is cleaned, a malformed feed URL no longer stops `--feeds`, the feed guard also refuses the SIIT range, and the self-update gate rejects every control, format, private-use and unassigned character (ESC included) and their escapes. The docs say the required Update gate check passes as skipped on branches not named `auto-update/*`.
 
 - Third /sec-audit round: `StrictHostKeyChecking=yes` on every connection (an empty or new known hosts file can no longer make a changed key look new), and `--ssh-opt` no longer allows ProxyJump, HostKeyAlias or StrictHostKeyChecking. Markdown escaping applies to quoted values only (the tool's own text reads as written) and also covers mentions, references and e-mail links. The state policy, UPS status and UniFi error text are quoted, ssh error output is cleaned, and the feed guard refuses IPv6 transition addresses (NAT64, IPv4-compatible and mapped, 6to4, Teredo). The self-update gate rejects Unicode tag characters and escaped invisible characters (`\uXXXX`, `\UXXXXXXXX`, HTML entities).

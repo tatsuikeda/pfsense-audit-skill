@@ -155,8 +155,14 @@ class ScanTextTest(unittest.TestCase):
         for n in range(1, len(lines) + 1):
             self.assertTrue(any(f"(added line {n})" in e for e in errors), (n, errors))
 
+    def test_named_entities_are_decoded_before_the_check(self):
+        lines = ["joiner &zwj; here", "space &ZeroWidthSpace; here", "soft &shy; hyphen", "separator &#x2028; here"]
+        errors = gate.scan_text("LESSONS.md", lines)
+        for n in range(1, len(lines) + 1):
+            self.assertTrue(any(f"(added line {n})" in e and "decodes to" in e for e in errors), (n, errors))
+
     def test_ordinary_escapes_allowed(self):
-        self.assertEqual([e for e in gate.scan_text("checks.toml", ['fix = "use \\u0041 here"', "caf\u00e9 &#233;"]) if "escaped" in e], [])
+        self.assertEqual(gate.scan_text("checks.toml", ['fix = "use \\u0041 here"', "caf\u00e9 &#233; &amp; &lt;b&gt;"]), [])
 
     def test_mentions_in_research_note(self):
         lines = ["Thanks @octocat and @some-org/team.", "Mail admin@example.com", "Use `@scoped/pkg` here",

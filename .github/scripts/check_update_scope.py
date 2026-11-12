@@ -70,9 +70,14 @@ BAD_CHARS = {
         *range(0xE0100, 0xE01F0),   # variation selectors supplement
     )},
 }
-# The same characters written as escapes, which TOML basic strings and some renderers
-# turn back into the real character: \uXXXX, \UXXXXXXXX, &#xXXXX; and &#NNNN;.
-ESCAPED_CHAR_RE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})|&#[xX]([0-9A-Fa-f]{1,6});|&#([0-9]{1,7});")
+# TOML and JSON escapes (\uXXXX, \UXXXXXXXX) are decoded with this, and HTML entities,
+# named or numeric, with html.unescape, before the character check runs.
+ESCAPED_CHAR_RE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})")
+
+
+def _decode_escape(m: re.Match) -> str:
+    code = int(m.group(1) or m.group(2), 16)
+    return chr(code) if code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF else "\uFFFD"
 DOUBLE_HYPHEN_RE = re.compile(r"(?:^|\s)--(?:\s|$)")
 SECRET_RE = re.compile(
     r"(sk-ant-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[ousr]_[A-Za-z0-9]{20,}"
@@ -153,16 +158,16 @@ def scan_text(path: str, lines: list[str]) -> list[str]:
         for ch, name in BAD_CHARS.items():
             if ch in line:
                 errors.append(f"{where}: contains {name}")
-        for ch in set(line):
-            if ch not in BAD_CHARS and ch != "\t" and unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp"):
-                errors.append(f"{where}: contains control, format, private-use or unassigned character U+{ord(ch):04X}")
-        for m in ESCAPED_CHAR_RE.finditer(line):
-            hexv, hex8, ent_hex, ent_dec = m.groups()
-            code = int(hexv or hex8 or ent_hex, 16) if (hexv or hex8 or ent_hex) else int(ent_dec)
-            if code > 0x10FFFF:
-                errors.append(f"{where}: escape out of Unicode range ({m.group(0)})")
-            elif chr(code) in BAD_CHARS or unicodedata.category(chr(code))[0] == "C" or unicodedata.category(chr(code)) in ("Zl", "Zp"):
-                errors.append(f"{where}: escaped control, format or invisible character U+{code:04X} ({m.group(0)})")
+        # Check the text as a later parser will see it: HTML entities (named and numeric)
+        # and TOML or JSON escapes decoded first, so no spelling of a hidden character passes.
+        decoded = html.unescape(ESCAPED_CHAR_RE.sub(_decode_escape, line))
+        for ch in sorted(set(decoded) - set(line)) + sorted(set(line)):
+            cat = unicodedata.category(ch)
+            if ch == "\t" or ch in BAD_CHARS and ch in line:
+                continue  # literal BAD_CHARS were reported above with their names
+            if ch in BAD_CHARS or cat[0] == "C" or cat in ("Zl", "Zp"):
+                how = "contains" if ch in line else "decodes to"
+                errors.append(f"{where}: {how} control, format, invisible or unassigned character U+{ord(ch):04X}")
         # A double hyphen inside a code span (a CLI flag such as `--feeds`) is fine.
         prose = re.sub(r"`[^`]*`", "", line)
         if DOUBLE_HYPHEN_RE.search(prose):
