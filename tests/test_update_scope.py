@@ -309,7 +309,7 @@ class MainEndToEndTest(unittest.TestCase):
         (self.dir / "checks.toml").write_text("# Checks may change the firewall.\n" + CATALOG, encoding="utf-8")
         rc, out = self.run_gate()
         self.assertEqual(rc, 1, out)
-        self.assertIn("comment lines", out)
+        self.assertIn("contains '#'", out)
 
     def test_inline_comment_change_fails(self):
         self.write_note()
@@ -318,16 +318,17 @@ class MainEndToEndTest(unittest.TestCase):
         (self.dir / "checks.toml").write_text(changed, encoding="utf-8")
         rc, out = self.run_gate()
         self.assertEqual(rc, 1, out)
-        self.assertIn("comment lines", out)
+        self.assertIn("contains '#'", out)
 
-    def test_hash_inside_string_is_not_a_comment(self):
-        self.assertEqual(gate.toml_comments('a = "x # y"\nb = \'p # q\'\nc = """\n# z\n"""\n'), [])
-
-    def test_multiline_string_closing_quotes_match_toml(self):
-        import tomllib
-        for text in ('a = """x"""" # c\n', "a = \'\'\'x\'\'\'\' # c\n", 'a = """x""""" # c\n'):
-            tomllib.loads(text)  # valid TOML, so the comment is real
-            self.assertEqual(gate.toml_comments(text), ["# c"], text)
+    def test_hash_in_any_changed_checks_line_fails(self):
+        for added in ('notes = """x"""" # c', "fix = 'a' # c", 'notes = "issue #9241"'):
+            with self.subTest(added=added):
+                self.write_note()
+                self._changelog()
+                (self.dir / "checks.toml").write_text(CATALOG + "\n[[checks]]\nid = \"DNS-099\"\ncategory = \"dns\"\ntitle = \"t\"\nrisk = \"low\"\nverified_on = [\"unverified\"]\n" + added + "\n", encoding="utf-8")
+                rc, out = self.run_gate()
+                self.assertEqual(rc, 1, out)
+                self.assertIn("contains '#'", out)
 
     def test_mention_in_note_fails(self):
         self.write_note("Ping @octocat. https://docs.netgate.com/\n")

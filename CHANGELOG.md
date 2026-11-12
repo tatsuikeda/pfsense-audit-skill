@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- Allow lists instead of heuristics, after review bypassed both: the gate rejects any added, changed or removed `checks.toml` line containing `#` (a note writes `\u0023`), replacing the TOML comment tokenizer; feed file names are shown only when they are plain words of up to 15 letters and an extension, otherwise masked.
+
 - The TOML comment tokenizer closes multi-line strings the way TOML does (up to two extra quote characters belong to the string), so a comment after `"""x""""` is seen.
 
 - Review follow-ups: the `checks.toml` comment lock reads inline comments too (a small TOML tokenizer that ignores `#` inside strings), and a key-like feed file name is masked even when it has an extension.
