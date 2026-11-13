@@ -97,7 +97,7 @@ What the skill handles for you:
 
 ## 🔍 What it checks
 
-**62 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
+**63 checks** across 10 areas, cataloged in [`checks.toml`](checks.toml). Each one lists the versions it was confirmed on, so you know which results to trust.
 
 | Area | Highlights |
 |---|---|
@@ -108,7 +108,7 @@ What the skill handles for you:
 | ⚡ **Performance** | AES-NI and hardware crypto, NIC offloading (TSO, LRO), CPU frequency scaling (SpeedStep, Speed Shift) 🔬 |
 | 🌡️ **Hardware health** | Thermal sensors, disk SMART, ZFS pool health, boot environments, auto power-on after outage (manual check) 🔬 |
 | 🔋 **Power** | NUT status, UPS alerts, shutdown thresholds |
-| 📣 **Monitoring & alerts** | Gateway monitor target, SMTP alerts, certificate expiry alerts, remote syslog, alert email that is failing to send (read from the system log) |
+| 📣 **Monitoring & alerts** | Gateway monitor target, monitor IPs that are also DNS servers, SMTP alerts, certificate expiry alerts, remote syslog, alert email that is failing to send (read from the system log) |
 | 💾 **Recovery** | AutoConfigBackup actually uploading (upload job present, nothing stuck in staging), local backups, System Patches |
 | 📡 **UniFi behind pfSense** | DHCP Guarding and Snooping, guest SSIDs and restricted subnets without a UniFi gateway, controller inform host, auto-upgrade (read-only via `--unifi`; DHCP Guarding, guest SSID and inform host checks not yet run on a live console 🔬) |
 
@@ -179,8 +179,8 @@ flowchart LR
 
 ## 🗺️ Roadmap
 
-- [x] `LESSONS.md`: 30 traps, written up with symptoms and fixes
-- [x] `checks.toml`: 62 checks with versions, risk, verify and fix steps (55 with a confirmed version, 6 unverified, 1 manual)
+- [x] `LESSONS.md`: 31 traps, written up with symptoms and fixes
+- [x] `checks.toml`: 63 checks with versions, risk, verify and fix steps (56 with a confirmed version, 6 unverified, 1 manual)
 - [x] Read-only UniFi controller checks (`--unifi`)
 - [ ] UniFi checks run against a live console (lab test of API key access to the legacy API)
 - [x] Read-only audit script, `pfaudit.py` (Markdown and JSON output)

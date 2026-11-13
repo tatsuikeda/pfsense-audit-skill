@@ -190,3 +190,10 @@ The monthly self-update re-tests feeds and updates this table.
 - **Detect:** `media` or `mediaopt` set on an interface whose `ipaddrv6` is `track6`, or on the interface it tracks.
 - **Fix:** set Speed and Duplex back to Default unless the link truly needs a fixed speed.
 - **Source:** reported by a reader on r/PFSENSE, who traced it to redmine issues 9241 and 4428. The reapply-on-reconfigure behaviour is confirmed in the pfSense source; the flapping itself has not been reproduced here, so the check reports WARN at most.
+
+### 31. A gateway monitor IP that is also a DNS server breaks DNS failover
+- **You see:** the second WAN takes over when the first fails, but name lookups keep timing out until the first WAN comes back.
+- **Really:** pfSense adds a host route to every gateway monitor IP through that gateway, so dpinger's pings cannot leave another way. If the same address is also a DNS server (monitor 1.1.1.1 on WAN1, DNS 1.1.1.1 in General Setup), every query to it is routed out WAN1 too, and with WAN1 down that server is unreachable no matter what the gateway group says. A DNS server pinned to a different gateway in General Setup adds a second host route for the same address, and the two fight. General Setup does not refuse the overlap.
+- **Detect:** an address in `system/dnsserver` or a DHCP server's DNS servers equals a `gateways/gateway_item` monitor, unless monitor static routes are turned off. `netstat -rn` shows it as a `UGHS` host route through the monitored gateway.
+- **Fix:** monitor an address you do not use for DNS (for example monitor 1.1.1.1 and resolve with 1.1.1.3 and 1.0.0.3, or monitor 9.9.9.10 and resolve with 9.9.9.9), and use a different monitor IP on each WAN.
+- **Source:** suggested by a reader on r/PFSENSE. The host route is in `setup_gateways_monitor()` in `gwlb.inc` and was seen on a live CE 2.9.0 box; on a single-WAN box the overlap has no effect yet, so the check reports INFO there.

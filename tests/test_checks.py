@@ -117,7 +117,7 @@ EXPECT_GOOD = {
     "PFB-001": "PASS", "PFB-002": "PASS", "PFB-003": "PASS", "PFB-004": "PASS", "PFB-005": "PASS", "PFB-006": "PASS",
     "PFB-007": "PASS", "PFB-008": "PASS", "PFB-009": "PASS",
     "REC-001": "PASS", "REC-002": "PASS", "REC-003": "PASS", "REC-004": "PASS",
-    "MON-001": "PASS", "MON-002": "PASS", "MON-003": "PASS", "MON-004": "PASS",
+    "MON-001": "PASS", "MON-002": "PASS", "MON-003": "PASS", "MON-004": "PASS", "MON-005": "PASS",
     "HW-001": "PASS", "HW-002": "PASS", "HW-003": "PASS", "HW-004": "PASS", "HW-005": "INFO", "HW-006": "INFO", "HW-007": "SKIP",
     "UPS-001": "PASS",
     "UNIFI-001": "PASS", "UNIFI-002": "PASS", "UNIFI-003": "PASS", "UNIFI-004": "PASS", "UNIFI-005": "PASS",
@@ -135,7 +135,7 @@ EXPECT_BAD = {
     "PFB-001": "WARN", "PFB-002": "FAIL", "PFB-003": "WARN", "PFB-004": "WARN", "PFB-005": "WARN", "PFB-006": "INFO",
     "PFB-007": "INFO", "PFB-008": "FAIL", "PFB-009": "FAIL",
     "REC-001": "WARN", "REC-002": "WARN", "REC-003": "INFO", "REC-004": "WARN",
-    "MON-001": "WARN", "MON-002": "WARN", "MON-003": "WARN", "MON-004": "WARN",
+    "MON-001": "WARN", "MON-002": "WARN", "MON-003": "WARN", "MON-004": "WARN", "MON-005": "WARN",
     "HW-001": "WARN", "HW-002": "WARN", "HW-003": "WARN", "HW-004": "FAIL", "HW-005": "INFO", "HW-006": "INFO", "HW-007": "SKIP",
     "UPS-001": "FAIL",
     "UNIFI-001": "FAIL", "UNIFI-002": "WARN", "UNIFI-003": "FAIL", "UNIFI-004": "WARN", "UNIFI-005": "WARN",
@@ -505,6 +505,34 @@ class RecoveryMonitorHardwareTest(unittest.TestCase):
 
     def test_gateway_without_monitor_warns(self):
         self.assertEqual(run("MON-001", make_ctx(config=[remove("gateways/gateway_item/monitor")])).status, "WARN")
+
+    def test_dns_server_as_monitor_ip(self):
+        r = run("MON-005", make_ctx(config=[set_text("system/dnsserver", "198.51.100.53")]))
+        self.assertEqual(r.status, "WARN")  # WANGW plus the dynamic LTEGW: two ways out
+        self.assertIn("WANGW", r.detail)
+        def single_wan(root):
+            gws = root.find("gateways")
+            for g in gws.findall("gateway_item"):
+                if g.findtext("name") == "LTEGW":
+                    gws.remove(g)
+        r = run("MON-005", make_ctx(config=[set_text("system/dnsserver", "198.51.100.53"), single_wan]))
+        self.assertEqual(r.status, "INFO")
+        r = run("MON-005", make_ctx("bad"))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("WAN2GW", r.detail)
+        # the overlap does not pin a route when static routes are off or monitoring is disabled
+        self.assertEqual(run("MON-005", make_ctx("bad", config=[set_text("system/dpinger_dont_add_static_routes", "")])).status, "PASS")
+        self.assertEqual(run("MON-005", make_ctx("bad", config=[set_text("gateways/gateway_item[name='WAN2GW']/monitor_disable", "")])).status, "PASS")
+        self.assertEqual(run("MON-005", make_ctx("bad", config=[set_text("gateways/gateway_item[name='WAN2GW']/dpinger_dont_add_static_route", "")])).status, "PASS")
+        # a DNS server handed out by DHCP counts too
+        def dhcp_dns(root):
+            ET.SubElement(ET.SubElement(ET.SubElement(root, "dhcpd"), "lan"), "dnsserver").text = "9.9.9.9"
+        r = run("MON-005", make_ctx("bad", config=[remove("system/dnsserver"), dhcp_dns]))
+        self.assertEqual(r.status, "WARN")
+        self.assertIn("DHCP on lan", r.detail)
+        # a DNS server pinned to a different gateway is called out
+        r = run("MON-005", make_ctx("bad", config=[set_text("system/dns1gw", "WANGW")]))
+        self.assertIn("its DNS gateway is", r.detail)
 
     def test_certexpire_default_on(self):
         r = run("MON-003", make_ctx(config=[remove("notifications/certexpire")]))

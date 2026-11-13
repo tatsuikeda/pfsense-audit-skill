@@ -457,6 +457,18 @@ impact = "restarts syslogd"
 verified_on = ["ce-2.9.0"]
 
 [[checks]]
+id = "MON-005"
+category = "monitoring"
+title = "No DNS server is also a gateway monitor IP"
+risk = "medium"
+verify = { config = "system/dnsserver and dhcpd/*/dnsserver against gateways/gateway_item/*/monitor, unless system/dpinger_dont_add_static_routes or the gateway has monitor_disable or dpinger_dont_add_static_route" }
+fix = "System > Routing > Gateways: give each gateway a monitor IP that is not one of your DNS servers (for example 1.1.1.1 to monitor while DNS uses 1.1.1.3 and 1.0.0.3)"
+impact = "restarts dpinger; gateway status resets"
+lesson = 31
+verified_on = ["ce-2.9.0"]
+notes = "Suggested on r/PFSENSE (2026-11-12). Host route to the monitor IP confirmed in gwlb.inc setup_gateways_monitor and on a live CE 2.9.0 box (UGHS route via the WAN gateway); General Setup does not refuse the overlap."
+
+[[checks]]
 id = "HW-001"
 category = "hardware"
 title = "Thermal sensors loaded and temperatures sane"

@@ -9,6 +9,8 @@
 <pfsense>
 	<version>24.6</version>
 	<system>
+		<dnsserver>198.51.100.54</dnsserver>
+		<dnsserver>198.51.100.55</dnsserver>
 		<hostname>fw</hostname>
 		<domain>example.com</domain>
 		<webgui>

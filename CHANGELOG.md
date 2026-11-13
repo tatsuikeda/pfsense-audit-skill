@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Monthly self-update pul
 
 ## Unreleased
 
+- New check MON-005 and lesson 31, suggested on r/PFSENSE: a gateway monitor IP that is also a DNS server (General Setup or a DHCP server) gets a host route through that gateway, so DNS to it fails with that WAN. WARN with two or more gateways, INFO with one, PASS when monitor static routes are off.
+
 - Allow lists instead of heuristics, after review bypassed both: the gate rejects any added, changed or removed `checks.toml` line containing `#` (a note writes `\u0023`), replacing the TOML comment tokenizer; feed file names are shown only when they are plain words of up to 15 letters and an extension, otherwise masked.
 
 - The TOML comment tokenizer closes multi-line strings the way TOML does (up to two extra quote characters belong to the string), so a comment after `"""x""""` is seen.
