@@ -892,6 +892,42 @@ def _(ctx):
     return Result("WARN", f"Gateway monitor pings the gateway itself: {', '.join(bad)} (lesson 3)") if bad else Result("PASS", "Gateway monitors use an internet target")
 
 
+@check("MON-005")
+def _(ctx):
+    # pfSense adds a host route to each monitor IP through its gateway
+    # (gwlb.inc setup_gateways_monitor), so a DNS server that is also a monitor
+    # IP is reachable only through that one gateway.
+    if enabled(ctx, "system/dpinger_dont_add_static_routes"):
+        return Result("PASS", "Monitor static routes are off (System > Advanced > Miscellaneous)")
+    gws = [g for g in ctx.all("gateways/gateway_item") if g.findtext("gateway")]
+    pinned = {}
+    for g in gws:
+        mon, gw = (g.findtext("monitor") or "").strip(), (g.findtext("gateway") or "").strip()
+        if not mon or mon == gw or g.find("monitor_disable") is not None or g.find("dpinger_dont_add_static_route") is not None:
+            continue
+        pinned.setdefault(mon.lower(), g.findtext("name") or gw)
+    uses = []
+    for i, el in enumerate(ctx.all("system/dnsserver"), 1):
+        uses.append((el.text or "", "General Setup DNS", ctx.get(f"system/dns{i}gw") or ""))
+    for kind in ("dhcpd", "dhcpdv6"):
+        sect = ctx.root.find(kind)
+        for iface in list(sect) if sect is not None else []:
+            for el in iface.findall("dnsserver"):
+                uses.append((el.text or "", f"DHCP on {iface.tag}", ""))
+    hits = []
+    for ip, where, dgw in uses:
+        gwname = pinned.get(ip.strip().lower())
+        if gwname:
+            clash = f", but its DNS gateway is {val(dgw)}" if dgw and dgw.lower() != "none" and dgw != gwname else ""
+            hits.append(f"{val(ip.strip())} ({tok(where)}) is the monitor IP of {val(gwname)}{clash}")
+    if not hits:
+        return Result("PASS", "No DNS server is also a gateway monitor IP")
+    detail = "; ".join(hits) + " (lesson 31)"
+    if len(gws) < 2:
+        return Result("INFO", "With one gateway this costs nothing yet, but it breaks DNS failover once a second WAN is added: " + detail)
+    return Result("WARN", "DNS to these servers can only leave through the monitored gateway, so it fails with that WAN: " + detail)
+
+
 @check("MON-002")
 def _(ctx):
     ok = ctx.get("notifications/smtp/ipaddress") and ctx.get("notifications/smtp/notifyemailaddress")

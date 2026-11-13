@@ -8,6 +8,7 @@
 <pfsense>
 	<version>24.6</version>
 	<system>
+		<dnsserver>9.9.9.9</dnsserver>
 		<hostname>fw-bad</hostname>
 		<domain>example.com</domain>
 		<webgui>
@@ -113,6 +114,12 @@
 			<name>WANGW</name>
 			<interface>wan</interface>
 			<gateway>203.0.113.1</gateway>
+		</gateway_item>
+		<gateway_item>
+			<name>WAN2GW</name>
+			<interface>opt1</interface>
+			<gateway>192.0.2.1</gateway>
+			<monitor>9.9.9.9</monitor>
 		</gateway_item>
 	</gateways>
 	<notifications>
